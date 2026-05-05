@@ -3,35 +3,53 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>LPR Scanner Final Fix</title>
+    <title>AI Plate Instant Stream</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <style>
-        body { margin: 0; background: #000; color: #0f0; font-family: monospace; overflow: hidden; }
-        #video { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
-        .ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        :root { --primary: #00ff88; --bg: #000; }
+        body { margin: 0; background: var(--bg); color: white; font-family: -apple-system, sans-serif; overflow: hidden; }
         
-        #log-window { 
-            position: absolute; top: 10px; left: 10px; right: 10px; 
-            max-height: 150px; background: rgba(0,0,0,0.8); 
-            font-size: 11px; padding: 10px; overflow-y: auto; border: 1px solid #0f0;
-            pointer-events: auto; z-index: 100;
-        }
+        #video { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
 
-        .btn-capture {
-            position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
-            width: 70px; height: 70px; background: rgba(255,255,255,0.2);
-            border: 4px solid #fff; border-radius: 50%; pointer-events: auto;
-            box-shadow: 0 0 15px rgba(0,0,0,0.5);
+        /* 掃描對準框 */
+        .scan-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            pointer-events: none;
         }
-        .btn-capture:active { background: rgba(0,255,136,0.5); }
+        .scan-box {
+            width: 80%; height: 25%; border: 2px solid var(--primary);
+            border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 136, 0.4);
+            position: relative;
+        }
+        .scan-line {
+            position: absolute; width: 100%; height: 2px; background: var(--primary);
+            top: 0; animation: scan 2s linear infinite;
+        }
+        @keyframes scan { from { top: 0; } to { top: 100%; } }
 
-        .result-box {
-            position: absolute; bottom: 140px; left: 20px; right: 20px;
-            background: #00ff88; color: #000; padding: 15px;
-            border-radius: 12px; font-weight: bold; pointer-events: auto;
+        /* 即時結果浮現 */
+        .instant-result {
+            margin-top: 30px;
+            background: rgba(0, 255, 136, 0.9);
+            color: #000;
+            padding: 10px 30px;
+            border-radius: 50px;
+            font-size: 32px;
+            font-weight: 900;
+            letter-spacing: 2px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         }
-        .error-text { color: #ff4444; }
+        @keyframes popIn { from { transform: scale(0.5); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+        .status-dot {
+            position: absolute; top: 20px; left: 20px;
+            display: flex; align-items: center; gap: 8px; font-size: 12px;
+        }
+        .dot { width: 10px; height: 10px; background: #555; border-radius: 50%; }
+        .dot.active { background: var(--primary); box-shadow: 0 0 10px var(--primary); }
     </style>
 </head>
 <body>
@@ -39,20 +57,23 @@
 <div id="app">
     <video id="video" autoplay playsinline></video>
     
-    <div class="ui">
-        <div id="log-window">
-            <div style="color: #aaa; border-bottom: 1px solid #333; margin-bottom: 5px;">DEBUG CONSOLE</div>
-            <div v-for="(log, index) in logs" :key="index" :class="{ 'error-text': log.includes('錯誤') }">
-                {{ log }}
-            </div>
+    <div class="scan-layer">
+        <div class="scan-box">
+            <div class="scan-line"></div>
         </div>
 
-        <div v-if="lastResult" class="result-box">
-            <div style="font-size: 24px;">{{ lastResult.plate.toUpperCase() }}</div>
-            <div style="font-size: 14px;">來自: {{ lastResult.region.toUpperCase() }} ({{ (lastResult.score*100).toFixed(1) }}%)</div>
+        <!-- 辨識到就即刻喺呢度顯示號碼 -->
+        <div v-if="lastPlate" class="instant-result">
+            {{ lastPlate }}
         </div>
+        <div v-else style="margin-top: 20px; color: rgba(255,255,255,0.5)">
+            {{ isAnalyzing ? '🔍 正在辨識中...' : '請對準車牌' }}
+        </div>
+    </div>
 
-        <div class="btn-capture" @click="doCapture"></div>
+    <div class="status-dot">
+        <div :class="['dot', isAnalyzing ? 'active' : '']"></div>
+        <span>{{ isAnalyzing ? 'AI STREAMING' : 'READY' }}</span>
     </div>
     
     <canvas id="canvas" style="display:none;"></canvas>
@@ -63,87 +84,62 @@ const { createApp, ref, onMounted } = Vue;
 
 createApp({
     setup() {
-        const logs = ref([]);
-        const lastResult = ref(null);
-        const isProcessing = ref(false);
-        
-        // 這是你截圖中的 Token
-        const API_KEY = "ad7d94a0aaef7ff209be02490d3f2748430defed";
-
-        const addLog = (msg) => {
-            logs.value.unshift(`[${new Date().toLocaleTimeString().split(' ')[0]}] ${msg}`);
-            if (logs.value.length > 20) logs.value.pop();
-        };
+        const lastPlate = ref("");
+        const isAnalyzing = ref(false);
+        const API_KEY = "ad7d94a0aaef7ff209be02490d3f2748430defed"; // 根據你截圖證實可用
 
         onMounted(async () => {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: "environment", width: 1280, height: 720 } 
-                });
-                document.getElementById('video').srcObject = stream;
-                addLog("相機啟動成功");
-            } catch (err) {
-                addLog("相機錯誤: " + err.message);
-            }
+            await initCamera();
+            // 每 1.5 秒自動影一張送去 API
+            setInterval(autoStreamScan, 1500);
         });
 
-        const doCapture = async () => {
-            if (isProcessing.value) return;
+        const initCamera = async () => {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment", width: 1280, height: 720 } 
+            });
+            document.getElementById('video').srcObject = stream;
+        };
+
+        const autoStreamScan = async () => {
+            if (isAnalyzing.value) return;
+            
             const video = document.getElementById('video');
             const canvas = document.getElementById('canvas');
-            
-            if (video.readyState !== 4) {
-                addLog("錯誤: 影片流未就緒");
-                return;
-            }
-
-            isProcessing.value = true;
-            addLog("正在上傳識別...");
+            if (video.readyState !== 4) return;
 
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             canvas.getContext('2d').drawImage(video, 0, 0);
 
-            canvas.toBlob(async (blob) => {
-                if (!blob) {
-                    addLog("錯誤: 圖片生成失敗");
-                    isProcessing.value = false;
-                    return;
-                }
+            isAnalyzing.value = true;
 
+            canvas.toBlob(async (blob) => {
                 const formData = new FormData();
                 formData.append('upload', blob);
-                // 暫時移除 regions 和 mmc，讓 API 處於最簡單模式
-                // formData.append('regions', 'gb,hk,cn'); 
 
                 try {
-                    const res = await axios({
-                        method: 'post',
-                        url: 'https://api.platerecognizer.com/v1/plate-reader/',
-                        data: formData,
-                        headers: { 
-                            'Authorization': `Token ${API_KEY}`
-                        }
+                    const res = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', formData, {
+                        headers: { 'Authorization': `Token ${API_KEY}` }
                     });
 
                     if (res.data.results && res.data.results.length > 0) {
-                        lastResult.value = res.data.results[0];
-                        addLog("成功！車牌: " + res.data.results[0].plate);
-                    } else {
-                        addLog("API 回傳成功，但沒認出車牌");
+                        const newPlate = res.data.results[0].plate.toUpperCase();
+                        // 只有當認到新車牌或結果唔同先更新，避免畫面閃爍
+                        if (lastPlate.value !== newPlate) {
+                            lastPlate.value = newPlate;
+                            if (window.navigator.vibrate) window.navigator.vibrate(50);
+                        }
                     }
                 } catch (err) {
-                    const status = err.response?.status;
-                    // 獲取 API 的詳細錯誤 JSON
-                    const errorDetail = err.response ? JSON.stringify(err.response.data) : err.message;
-                    addLog(`錯誤(${status}): ${errorDetail}`);
+                    console.error("Stream Error:", err);
                 } finally {
-                    isProcessing.value = false;
+                    isAnalyzing.value = false;
                 }
-            }, 'image/jpeg', 0.8);
+            }, 'image/jpeg', 0.7);
         };
 
-        return { logs, lastResult, isProcessing, doCapture };
+        return { lastPlate, isAnalyzing };
     }
 }).mount('#app');
 </script>
