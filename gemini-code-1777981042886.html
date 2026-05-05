@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI 實時車牌偵測</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        :root { --primary: #00ff88; --bg: #000; }
+        body { font-family: -apple-system, system-ui; background: var(--bg); color: white; margin: 0; overflow: hidden; }
+        
+        /* 影片背景 */
+        #video-container { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+        #video { width: 100%; height: 100%; object-fit: cover; }
+
+        /* 掃描 UI 層 */
+        .overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            pointer-events: none;
+        }
+        .scan-box {
+            width: 80%; height: 30%; border: 2px solid var(--primary);
+            border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
+            position: relative;
+        }
+        .scan-line {
+            position: absolute; width: 100%; height: 2px; background: var(--primary);
+            top: 0; animation: scan 2s linear infinite;
+        }
+        @keyframes scan { from { top: 0; } to { top: 100%; } }
+
+        /* 結果面板 */
+        .info-panel {
+            position: absolute; bottom: 20px; left: 10px; right: 10px;
+            background: rgba(25, 25, 25, 0.9); padding: 20px;
+            border-radius: 20px; backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .plate-text { font-size: 32px; font-weight: 800; color: var(--primary); letter-spacing: 2px; margin-bottom: 5px; }
+        .vehicle-meta { font-size: 16px; color: #ccc; display: flex; gap: 10px; }
+        .badge { background: #333; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+
+        /* 狀態指示器 */
+        .status { position: absolute; top: 20px; left: 20px; display: flex; align-items: center; gap: 8px; }
+        .dot { width: 10px; height: 10px; background: #666; border-radius: 50%; }
+        .dot.active { background: var(--primary); box-shadow: 0 0 10px var(--primary); }
+    </style>
+</head>
+<body>
+
+<div id="app">
+    <div id="video-container">
+        <video id="video" autoplay playsinline></video>
+        
+        <!-- 掃描動畫層 -->
+        <div class="overlay">
+            <div class="scan-box">
+                <div class="scan-line"></div>
+            </div>
+            <p style="margin-top: 20px; color: var(--primary); font-size: 14px;">偵測中：香港 / 中國 / 英國 車牌</p>
+        </div>
+
+        <!-- 狀態顯示 -->
+        <div class="status">
+            <div :class="['dot', isProcessing ? 'active' : '']"></div>
+            <span>{{ isProcessing ? 'AI 分析中...' : '系統就緒' }}</span>
+        </div>
+
+        <!-- 偵測結果 -->
+        <div v-if="lastResult" class="info-panel">
+            <div class="plate-text">{{ lastResult.plate.toUpperCase() }}</div>
+            <div class="vehicle-meta">
+                <span class="badge">{{ lastResult.region.toUpperCase() }}</span>
+                <span>{{ vehicle.color }}</span>
+                <span>{{ vehicle.make }} {{ vehicle.model }}</span>
+            </div>
+        </div>
+    </div>
+    <canvas id="canvas" style="display:none;"></canvas>
+</div>
+
+<script>
+const { createApp, ref, onMounted } = Vue;
+
+createApp({
+    setup() {
+        const lastResult = ref(null);
+        const vehicle = ref({ color: '', make: '', model: '' });
+        const isProcessing = ref(false);
+        
+        // 已填入你的 API Key
+        const API_KEY = "ad7d94a0aaef7ff209be02490d3f2748430defed"; 
+
+        onMounted(() => {
+            initCamera();
+            // 每 2.5 秒執行一次偵測，避免請求過於頻繁
+            setInterval(captureImage, 2500);
+        });
+
+        const initCamera = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        facingMode: "environment",
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
+                document.getElementById('video').srcObject = stream;
+            } catch (err) {
+                alert("無法存取相機，請確保網址為 HTTPS 環境且已授權。");
+            }
+        };
+
+        const captureImage = async () => {
+            if (isProcessing.value) return;
+
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            if (video.readyState !== 4) return;
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+
+            isProcessing.value = true;
+
+            canvas.toBlob(async (blob) => {
+                const formData = new FormData();
+                formData.append('upload', blob);
+                formData.append('regions', 'hk,cn,gb'); // 香港、中國、英國
+                formData.append('mmc', 'true'); // 開啟車型與顏色識別
+
+                try {
+                    const response = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', formData, {
+                        headers: { 'Authorization': `Token ${API_KEY}` }
+                    });
+
+                    if (response.data.results && response.data.results.length > 0) {
+                        const data = response.data.results[0];
+                        lastResult.value = data;
+                        
+                        // 處理車型與顏色數據
+                        vehicle.value = {
+                            color: data.vehicle?.color?.[0]?.color || '未知顏色',
+                            make: data.vehicle?.make?.[0]?.make || '未知品牌',
+                            model: data.vehicle?.model?.[0]?.model || ''
+                        };
+
+                        // 成功識別後手機震動反饋
+                        if (window.navigator.vibrate) window.navigator.vibrate(100);
+                    }
+                } catch (error) {
+                    console.error("API Error:", error);
+                } finally {
+                    isProcessing.value = false;
+                }
+            }, 'image/jpeg', 0.8);
+        };
+
+        return { lastResult, vehicle, isProcessing };
+    }
+}).mount('#app');
+</script>
+
+</body>
+</html>
