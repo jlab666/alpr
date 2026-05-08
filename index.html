@@ -1,61 +1,95 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ALPR System</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>S.F. ALPR System</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <style>
-        body { margin: 0; background: #000; color: #fff; text-align: center; font-family: sans-serif; }
-        #v { width: 100vw; height: 60vh; object-fit: cover; }
-        .res { font-size: 40px; padding: 20px; color: #ffcc00; }
-        .btn-group { display: flex; padding: 10px; gap: 5px; }
-        .btn { flex: 1; padding: 15px; background: #333; border: 1px solid #555; color: #fff; }
-        .active { background: #fff; color: #000; }
+        :root { --p1: #007bff; --p2: #ffcc00; }
+        body { margin: 0; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; }
+        #v { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
+        .ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; pointer-events: none; }
+        .nav { padding: 15px; background: rgba(0,0,0,0.85); display: flex; gap: 8px; pointer-events: auto; }
+        .btn { flex: 1; padding: 15px; border-radius: 8px; border: 1px solid #444; background: #222; color: #888; font-size: 14px; font-weight: bold; text-align: center; }
+        .btn.active { background: #fff; color: #000; border-color: #fff; }
+        .vp { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; }
+        .box { width: 85%; height: 22%; border: 3px solid rgba(255,255,255,0.3); border-radius: 12px; transition: 0.3s; }
+        .c1 { border-color: var(--p1); box-shadow: 0 0 25px var(--p1); }
+        .c2 { border-color: var(--p2); box-shadow: 0 0 25px var(--p2); }
+        .loader { position: absolute; width: 50px; height: 50px; border: 4px solid transparent; border-top-color: #fff; border-radius: 50%; animation: sp 1s linear infinite; display: none; }
+        .busy .loader { display: block; }
+        @keyframes sp { to { transform: rotate(360deg); } }
+        .pnl { padding: 35px; background: #000; text-align: center; pointer-events: auto; }
+        .num { font-size: 50px; font-weight: 900; letter-spacing: 2px; }
+        .st { font-size: 11px; color: #555; margin-top: 10px; text-transform: uppercase; }
     </style>
 </head>
 <body>
 <div id="app">
     <video id="v" autoplay playsinline muted></video>
-    <div class="btn-group">
-        <button class="btn" :class="{active: m==='c'}" @click="m='c'">ZONE A</button>
-        <button class="btn" :class="{active: m==='h'}" @click="m='h'">ZONE B</button>
+    <div :class="['ui', b ? 'busy' : '']">
+        <div class="nav">
+            <div :class="['btn', m==='c'?'active':'']" @click="m='c'">ZONE A (中國/黑牌)</div>
+            <div :class="['btn', m==='h'?'active':'']" @click="m='h'">ZONE B (香港/英數)</div>
+        </div>
+        <div class="vp">
+            <div :class="['box', bx]"></div>
+            <div class="loader"></div>
+        </div>
+        <div class="pnl">
+            <div class="num" :style="{color: rc}">{{ r || '---' }}</div>
+            <div class="st">狀態: {{ b ? '辨識中...' : '就緒' }} | 紀錄已同步</div>
+        </div>
     </div>
-    <div class="res">{{ r || 'WAITING...' }}</div>
     <canvas id="c" style="display:none;"></canvas>
 </div>
 
 <script>
-const { createApp, ref, onMounted } = Vue;
+const { createApp, ref, onMounted, computed } = Vue;
 createApp({
     setup() {
-        const r = ref(""), m = ref("c"), b = ref(false);
+        const r = ref(""), b = ref(false), m = ref("c");
         const BASE = "https://surrey-buyer-think-vegetarian.trycloudflare.com";
 
         onMounted(async () => {
-            const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+            const s = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment", width: { ideal: 1280 } } 
+            });
             document.getElementById('v').srcObject = s;
-            setInterval(scan, 3000);
+            setInterval(scan, 3000); // 3秒影一次，確保 VM 唔會過熱
         });
 
         const scan = async () => {
             if (b.value) return;
             const v = document.getElementById('v'), cv = document.getElementById('c');
+            if (v.readyState !== 4) return;
+
             b.value = true;
-            cv.width = 800; cv.height = v.videoHeight * (800/v.videoWidth);
+            cv.width = 800; cv.height = (v.videoHeight/v.videoWidth)*800;
             cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+            
             cv.toBlob(async (blob) => {
-                const fd = new FormData(); fd.append('upload', blob);
+                const path = m.value === 'c' ? "/identify_cn" : "/identify_intl";
                 try {
-                    const path = m.value === 'c' ? "/identify_cn" : "/identify_intl";
-                    const res = await axios.post(BASE + path, fd);
-                    if (res.data.status === 'success') r.value = res.data.plate;
-                } catch (e) { console.error("Error"); }
-                finally { b.value = false; }
-            }, 'image/jpeg', 0.8);
+                    const fd = new FormData();
+                    fd.append('upload', blob, 'capture.jpg');
+                    const s = await axios.post(BASE + path, fd);
+                    if (s.data.status === 'success') {
+                        r.value = s.data.plate;
+                    }
+                } catch (e) {
+                    console.error("System Error");
+                } finally {
+                    b.value = false;
+                }
+            }, 'image/jpeg', 0.9);
         };
-        return { r, m, b };
+
+        const bx = computed(() => m.value==='c' ? 'c1' : 'c2');
+        const rc = computed(() => m.value==='c' ? '#007bff' : '#ffcc00');
+        return { r, b, m, bx, rc };
     }
 }).mount('#app');
 </script>
