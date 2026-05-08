@@ -3,31 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI Plate - Character Logic</title>
+    <title>AI Hybrid ALPR - Manual Toggle</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
-        :root { --hk-color: #ffcc00; --cn-color: #007bff; --bg: #000; }
-        body { margin: 0; background: var(--bg); color: white; font-family: sans-serif; overflow: hidden; }
+        :root { --hk-color: #ffcc00; --cn-color: #007bff; --black-color: #ffffff; --bg: #000; }
+        body { margin: 0; background: var(--bg); color: white; font-family: -apple-system, sans-serif; overflow: hidden; }
         #video { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
         
         .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; pointer-events: none; }
-        .top-info { padding: 15px; background: rgba(0,0,0,0.7); display: flex; justify-content: space-between; pointer-events: auto; }
         
-        .scan-container { flex: 1; display: flex; align-items: center; justify-content: center; }
-        .scan-box { 
-            width: 80%; height: 22%; border: 3px solid rgba(255,255,255,0.4); 
-            border-radius: 12px; transition: 0.4s; position: relative;
+        /* 頂部切換區 */
+        .top-nav { padding: 15px; background: rgba(0,0,0,0.7); display: flex; justify-content: center; gap: 10px; pointer-events: auto; }
+        .mode-btn { 
+            padding: 8px 15px; border-radius: 8px; border: 1px solid #555; background: #222; color: #888; 
+            font-size: 12px; cursor: pointer; transition: 0.3s;
         }
-        /* 視覺反饋：根據偵測到的文字類型變色 */
-        .box-cn { border-color: var(--cn-color); box-shadow: 0 0 25px var(--cn-color); }
-        .box-hk { border-color: var(--hk-color); box-shadow: 0 0 25px var(--hk-color); }
+        .mode-btn.active { background: #fff; color: #000; border-color: #fff; font-weight: bold; }
 
-        .result-area { padding: 25px; background: rgba(0,0,0,0.85); border-top: 1px solid #333; pointer-events: auto; text-align: center; }
-        .plate-display { font-size: 40px; font-weight: 900; margin: 5px 0; }
-        .label-tag { font-size: 12px; padding: 3px 8px; border-radius: 5px; margin-bottom: 5px; display: inline-block; }
+        .viewport { flex: 1; display: flex; align-items: center; justify-content: center; }
+        .scan-box { 
+            width: 85%; height: 20%; border: 2px solid rgba(255,255,255,0.3); 
+            border-radius: 12px; position: relative; transition: 0.3s;
+        }
+        /* 根據當前路由顯示顏色 */
+        .route-cn { border-color: var(--cn-color); box-shadow: 0 0 20px var(--cn-color); }
+        .route-hk { border-color: var(--hk-color); box-shadow: 0 0 20px var(--hk-color); }
+        .route-black { border-color: var(--black-color); box-shadow: 0 0 20px var(--black-color); }
+
+        .bottom-panel { padding: 25px; background: rgba(0,0,0,0.85); border-top: 1px solid #333; text-align: center; pointer-events: auto; }
+        .plate-num { font-size: 42px; font-weight: 900; letter-spacing: 1px; margin-bottom: 5px; }
+        .status-msg { font-size: 11px; opacity: 0.5; }
     </style>
 </head>
 <body>
@@ -36,42 +44,40 @@
     <video id="video" autoplay playsinline muted></video>
     
     <div class="overlay">
-        <div class="top-info">
-            <span>📡 狀態: {{ modelStatus }}</span>
-            <span>節省 Token: {{ savedCount }}</span>
+        <div class="top-nav">
+            <div :class="['mode-btn', configMode === 'auto' ? 'active' : '']" @click="configMode = 'auto'">AUTO 自動</div>
+            <div :class="['mode-btn', configMode === 'cn' ? 'active' : '']" @click="configMode = 'cn'">CN/黑牌 (RHEL)</div>
+            <div :class="['mode-btn', configMode === 'hk' ? 'active' : '']" @click="configMode = 'hk'">HK/GB (Cloud)</div>
         </div>
 
-        <div class="scan-container">
-            <div :class="['scan-box', detectedType === 'CN' ? 'box-cn' : 'box-hk']">
-                <div v-if="isAnalyzing" style="position:absolute; width:100%; top:40%; text-align:center;">AI 分析中...</div>
+        <div class="viewport">
+            <div :class="['scan-box', currentRouteClass]">
+                <div v-if="isAnalyzing" style="position:absolute; width:100%; top:40%; text-align:center; font-size:12px;">AI 分析中...</div>
             </div>
         </div>
 
-        <div class="result-area">
-            <div v-if="lastPlate">
-                <span class="label-tag" :style="{background: detectedType === 'CN' ? '#007bff' : '#ffcc00', color: detectedType === 'CN' ? '#fff' : '#000'}">
-                    {{ detectedType === 'CN' ? '偵測到漢字/中港特徵' : '偵測到英數/香港特徵' }}
-                </span>
-                <div class="plate-display" :style="{color: detectedType === 'CN' ? '#007bff' : '#ffcc00'}">{{ lastPlate }}</div>
+        <div class="bottom-panel">
+            <div v-if="lastPlate" class="plate-num" :style="{color: plateColor}">{{ lastPlate }}</div>
+            <div v-else style="color:#666;">等待目標...</div>
+            <div class="status-msg">
+                使用服務: {{ activeServerName }} | 節省 Token: {{ savedCount }}
             </div>
-            <div v-else style="color: #666;">對準車牌自動辨識</div>
-            <div style="font-size: 10px; color: #444; margin-top: 10px;">路由: {{ currentRoute }}</div>
         </div>
     </div>
     <canvas id="canvas" style="display:none;"></canvas>
 </div>
 
 <script>
-const { createApp, ref, onMounted } = Vue;
+const { createApp, ref, onMounted, computed } = Vue;
 
 createApp({
     setup() {
         const lastPlate = ref("");
         const isAnalyzing = ref(false);
-        const modelStatus = ref("AI 載入中...");
-        const detectedType = ref("HK"); 
+        const configMode = ref("auto"); // auto, cn, hk
+        const autoDetectedType = ref("hk"); 
         const savedCount = ref(0);
-        const currentRoute = ref("Waiting...");
+        const modelReady = ref(false);
         
         const PR_TOKEN = "ad7d94a0aaef7ff209be02490d3f2748430defed";
         const MY_RHEL_URL = "https://translations-gratis-journalists-inputs.trycloudflare.com/identify_cn";
@@ -79,49 +85,47 @@ createApp({
         onMounted(async () => {
             const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
             document.getElementById('video').srcObject = stream;
-            
             const net = await cocoSsd.load();
-            modelStatus.value = "本地監控中";
-            
-            // 掃描頻率
-            setInterval(() => processFrame(net), 1500);
+            modelReady.value = true;
+            setInterval(() => runLogic(net), 1500);
         });
 
-        const processFrame = async (net) => {
-            if (isAnalyzing.value) return;
+        const runLogic = async (net) => {
+            if (isAnalyzing.value || !modelReady.value) return;
             const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
             if (video.readyState !== 4) return;
 
-            // 1. 基礎車輛偵測
+            // 1. 本地偵測有沒有車 (節省 Token)
             const predictions = await net.detect(video);
-            const hasVehicle = predictions.some(p => ['car','truck','bus'].includes(p.class));
-            if (!hasVehicle) { savedCount.value++; return; }
+            if (!predictions.some(p => ['car','truck','bus'].includes(p.class))) {
+                savedCount.value++;
+                return;
+            }
 
-            // 2. 邏輯判斷：漢字/顏色複合分析
-            // 我們利用 canvas 分析區域
-            const canvas = document.getElementById('canvas');
-            const ctx = canvas.getContext('2d');
-            canvas.width = 200; canvas.height = 100;
-            ctx.drawImage(video, video.videoWidth/4, video.videoHeight/4, video.videoWidth/2, video.videoHeight/2, 0, 0, 200, 100);
-            
-            const imgData = ctx.getImageData(0, 0, 200, 100).data;
-            const isChineseStyle = checkChineseFeatures(imgData);
-            
-            detectedType.value = isChineseStyle ? "CN" : "HK";
+            // 2. 自動模式下的顏色分析
+            if (configMode.value === "auto") {
+                const ctx = canvas.getContext('2d');
+                canvas.width = 100; canvas.height = 100;
+                ctx.drawImage(video, video.videoWidth*0.25, video.videoHeight*0.4, video.videoWidth*0.5, video.videoHeight*0.2, 0, 0, 100, 100);
+                const data = ctx.getImageData(0, 0, 100, 100).data;
+                analyzeColor(data);
+            }
 
-            // 3. 執行辨識
+            // 3. OCR 辨識
             isAnalyzing.value = true;
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
-            ctx.drawImage(video, 0, 0);
+            canvas.getContext('2d').drawImage(video, 0, 0);
 
             canvas.toBlob(async (blob) => {
                 try {
-                    if (detectedType.value === "CN") {
-                        currentRoute.value = "使用 RHEL (HyperLPR - 漢字模式)";
+                    // 決定走哪條路
+                    const useRHEL = configMode.value === "cn" || (configMode.value === "auto" && (autoDetectedType.value === "cn" || autoDetectedType.value === "black"));
+                    
+                    if (useRHEL) {
                         await callRHEL(blob);
                     } else {
-                        currentRoute.value = "使用 Plate Recognizer (英數模式)";
                         await callPR(blob);
                     }
                 } finally {
@@ -130,30 +134,22 @@ createApp({
             }, 'image/jpeg', 0.8);
         };
 
-        const checkChineseFeatures = (data) => {
-            let blue = 0, green = 0, dark = 0;
+        const analyzeColor = (data) => {
+            let r=0, b=0, dark=0;
             for(let i=0; i<data.length; i+=4) {
-                const r=data[i], g=data[i+1], b=data[i+2];
-                // 偵測藍色 (中國普通牌)
-                if (b > r + 30 && b > g + 10) blue++;
-                // 偵測綠色 (中國新能源牌)
-                if (g > r + 30 && g > b + 10) green++;
-                // 偵測黑色 (中港兩地牌特徵)
-                if (r < 50 && g < 50 && b < 50) dark++;
+                if (data[i+2] > data[i] + 15) b++;
+                if (data[i] < 50 && data[i+1] < 50 && data[i+2] < 50) dark++;
             }
-            // 如果藍/綠/黑特徵明顯，判定為中國/中港格式
-            const threshold = data.length / 4 * 0.15; // 15% 面積符合即觸發
-            return (blue > threshold || green > threshold || dark > threshold);
+            if (b > 1500) autoDetectedType.value = "cn";
+            else if (dark > 3000) autoDetectedType.value = "black";
+            else autoDetectedType.value = "hk";
         };
 
         const callRHEL = async (blob) => {
             const fd = new FormData();
             fd.append('upload', blob);
             const res = await axios.post(MY_RHEL_URL, fd);
-            if (res.data.status === "success") {
-                lastPlate.value = res.data.plate;
-                if (window.navigator.vibrate) window.navigator.vibrate(100);
-            }
+            if (res.data.status === "success") lastPlate.value = res.data.plate;
         };
 
         const callPR = async (blob) => {
@@ -162,13 +158,24 @@ createApp({
             const res = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', fd, {
                 headers: { 'Authorization': `Token ${PR_TOKEN}` }
             });
-            if (res.data.results?.length > 0) {
-                lastPlate.value = res.data.results[0].plate.toUpperCase();
-                if (window.navigator.vibrate) window.navigator.vibrate(50);
-            }
+            if (res.data.results?.length > 0) lastPlate.value = res.data.results[0].plate.toUpperCase();
         };
 
-        return { lastPlate, isAnalyzing, modelStatus, detectedType, savedCount, currentRoute };
+        // UI 計算屬性
+        const currentRouteClass = computed(() => {
+            const type = configMode.value === 'auto' ? autoDetectedType.value : configMode.value;
+            return `route-${type}`;
+        });
+        const activeServerName = computed(() => {
+            const useRHEL = configMode.value === "cn" || (configMode.value === "auto" && (autoDetectedType.value === "cn" || autoDetectedType.value === "black"));
+            return useRHEL ? "RHEL (Free)" : "Cloud (PR)";
+        });
+        const plateColor = computed(() => {
+            const useRHEL = configMode.value === "cn" || (configMode.value === "auto" && (autoDetectedType.value === "cn" || autoDetectedType.value === "black"));
+            return useRHEL ? "#007bff" : "#ffcc00";
+        });
+
+        return { lastPlate, isAnalyzing, configMode, savedCount, modelReady, currentRouteClass, activeServerName, plateColor };
     }
 }).mount('#app');
 </script>
