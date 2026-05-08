@@ -3,56 +3,46 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI Smart LPR - TFJS Filter</title>
+    <title>AI Hybrid ALPR System</title>
     
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-    
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
     <style>
-        :root { --primary: #00ff88; --warn: #ffcc00; --bg: #000; }
+        :root { --hk-color: #ffcc00; --cn-color: #007bff; --bg: #000; --active: #00ff88; }
         body { margin: 0; background: var(--bg); color: white; font-family: -apple-system, sans-serif; overflow: hidden; }
-        
         #video { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
 
-        .scan-layer {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            pointer-events: none;
-        }
+        /* UI 層 */
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; pointer-events: none; }
         
-        /* 增加掃描框顏色變化 */
-        .scan-box {
-            width: 80%; height: 25%; border: 2px solid rgba(255, 255, 255, 0.3);
-            border-radius: 15px; position: relative; transition: all 0.3s;
-        }
-        .scan-box.detecting { border-color: var(--warn); box-shadow: 0 0 15px var(--warn); }
-        .scan-box.identifying { border-color: var(--primary); box-shadow: 0 0 20px var(--primary); }
+        /* 頂部狀態 */
+        .status-bar { padding: 15px; background: rgba(0,0,0,0.7); display: flex; justify-content: space-between; pointer-events: auto; font-size: 13px; }
+        .badge { padding: 4px 10px; border-radius: 10px; font-weight: bold; }
+        .bg-cn { background: var(--cn-color); color: white; }
+        .bg-hk { background: var(--hk-color); color: black; }
 
-        .scan-line {
-            position: absolute; width: 100%; height: 2px; background: var(--primary);
-            top: 0; animation: scan 2s linear infinite; display: none;
+        /* 掃描框 */
+        .viewport { flex: 1; display: flex; align-items: center; justify-content: center; }
+        .scan-box { 
+            width: 80%; height: 25%; border: 2px solid rgba(255,255,255,0.3); 
+            border-radius: 15px; position: relative; transition: 0.3s;
         }
-        .identifying .scan-line { display: block; }
+        /* 根據分流改變顏色 */
+        .scan-box.mode-cn { border-color: var(--cn-color); box-shadow: 0 0 20px var(--cn-color); }
+        .scan-box.mode-hk { border-color: var(--hk-color); box-shadow: 0 0 20px var(--hk-color); }
+        .scan-line { position: absolute; width: 100%; height: 2px; background: #fff; top: 0; animation: scan 2s linear infinite; display: none; }
+        .active .scan-line { display: block; }
 
+        /* 結果顯示 */
+        .result-panel { padding: 25px; background: rgba(0,0,0,0.85); border-top: 1px solid #333; pointer-events: auto; text-align: center; }
+        .plate-text { font-size: 42px; font-weight: 900; margin: 10px 0; text-shadow: 0 0 10px rgba(255,255,255,0.5); }
+        
+        .btn-toggle { background: #444; color: white; border: none; padding: 8px 15px; border-radius: 8px; cursor: pointer; }
+        
         @keyframes scan { from { top: 0; } to { top: 100%; } }
-
-        .instant-result {
-            margin-top: 30px; background: var(--primary); color: #000;
-            padding: 10px 30px; border-radius: 50px; font-size: 32px;
-            font-weight: 900; letter-spacing: 2px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-        }
-
-        .status-ui {
-            position: absolute; top: 20px; left: 20px; right: 20px;
-            display: flex; justify-content: space-between; align-items: center;
-            font-size: 12px; background: rgba(0,0,0,0.5); padding: 8px 15px; border-radius: 20px;
-        }
-        .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
-        .dot.red { background: #ff4444; }
-        .dot.green { background: var(--primary); }
     </style>
 </head>
 <body>
@@ -60,28 +50,33 @@
 <div id="app">
     <video id="video" autoplay playsinline muted></video>
     
-    <div class="scan-layer">
-        <div :class="['scan-box', hasVehicle ? 'detecting' : '', isAnalyzing ? 'identifying' : '']">
-            <div class="scan-line"></div>
+    <div class="overlay">
+        <div class="status-bar">
+            <div>
+                <span class="badge" :class="isAuto ? '' : (manualTarget === 'cn' ? 'bg-cn' : 'bg-hk')">
+                    模式: {{ isAuto ? '智能自動分流' : (manualTarget === 'cn' ? '強制中國牌' : '強制中港/英牌') }}
+                </span>
+            </div>
+            <button class="btn-toggle" @click="toggleMode">切換路由</button>
         </div>
 
-        <div v-if="lastPlate" class="instant-result">
-            {{ lastPlate }}
+        <div class="viewport">
+            <div :class="['scan-box', currentRoute === 'cn' ? 'mode-cn' : 'mode-hk', isAnalyzing ? 'active' : '']">
+                <div class="scan-line"></div>
+            </div>
         </div>
-        
-        <div style="margin-top: 20px; color: #fff; font-size: 14px; background: rgba(0,0,0,0.6); padding: 5px 15px; border-radius: 10px;">
-            {{ aiStatus }}
-        </div>
-    </div>
 
-    <div class="status-ui">
-        <div>
-            <span :class="['dot', modelLoaded ? 'green' : 'red']"></span>
-            本地 AI: {{ modelLoaded ? 'ON' : 'LOADING' }}
+        <div class="result-panel">
+            <div v-if="lastResult" class="plate-text" :style="{ color: lastResult.from === 'cn' ? '#007bff' : '#ffcc00' }">
+                {{ lastResult.plate }}
+            </div>
+            <div v-else style="color: #888;">{{ aiStatus }}</div>
+            
+            <div style="font-size: 11px; margin-top: 10px; color: #666;">
+                路由: {{ routeLog }} | 節省 Token: {{ savedTokens }}
+            </div>
         </div>
-        <div>已呼叫 API: {{ tokenUsed }} 次</div>
     </div>
-    
     <canvas id="canvas" style="display:none;"></canvas>
 </div>
 
@@ -90,105 +85,109 @@ const { createApp, ref, onMounted } = Vue;
 
 createApp({
     setup() {
-        const lastPlate = ref("");
+        const lastResult = ref(null);
         const isAnalyzing = ref(false);
-        const hasVehicle = ref(false);
+        const isAuto = ref(true);
+        const manualTarget = ref("hk");
+        const currentRoute = ref("hk");
+        const aiStatus = ref("正在啟動本地 AI...");
+        const routeLog = ref("等待目標...");
+        const savedTokens = ref(0);
         const modelLoaded = ref(false);
-        const aiStatus = ref("正在初始化本地 AI...");
-        const tokenUsed = ref(0);
         
         let net = null;
-        const API_KEY = "ad7d94a0aaef7ff209be02490d3f2748430defed";
+        const PR_TOKEN = "ad7d94a0aaef7ff209be02490d3f2748430defed";
+        // 這是你剛剛通了的 RHEL Cloudflare 網址
+        const MY_RHEL_URL = "https://surrey-buyer-think-vegetarian.trycloudflare.com/identify_cn";
 
         onMounted(async () => {
-            await initCamera();
-            await loadLocalAI();
-            // 開始循環監測 (本地偵測可以跑快啲，因為唔洗錢)
-            setInterval(smartScanner, 800); 
-        });
-
-        const loadLocalAI = async () => {
-            try {
-                // 加載輕量級 COCO-SSD 模型
-                net = await cocoSsd.load();
-                modelLoaded.value = true;
-                aiStatus.value = "等待偵測車輛...";
-            } catch (e) {
-                aiStatus.value = "AI 加載失敗，請檢查網絡";
-            }
-        };
-
-        const initCamera = async () => {
             const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } 
+                video: { facingMode: "environment", width: 1280, height: 720 } 
             });
             document.getElementById('video').srcObject = stream;
+            
+            // 加載本地 TFJS 模型做過濾
+            net = await cocoSsd.load();
+            modelLoaded.value = true;
+            aiStatus.value = "請對準車牌";
+            
+            // 每 1.2 秒跑一次邏輯
+            setInterval(mainLogic, 1200);
+        });
+
+        const toggleMode = () => {
+            if (isAuto.value) { isAuto.value = false; manualTarget.value = "hk"; }
+            else if (manualTarget.value === "hk") { manualTarget.value = "cn"; }
+            else { isAuto.value = true; }
         };
 
-        const smartScanner = async () => {
-            if (!modelLoaded.value || isAnalyzing.value) return;
-
+        const mainLogic = async () => {
+            if (isAnalyzing.value || !modelLoaded.value) return;
             const video = document.getElementById('video');
             if (video.readyState !== 4) return;
 
-            // --- STEP 1: 本地 AI 預檢 (FREE) ---
+            // 1. 本地預檢：見到車先郁手
             const predictions = await net.detect(video);
-            
-            // 檢查有沒有車輛類目標
-            const vehicleDetected = predictions.some(p => 
-                ['car', 'truck', 'bus', 'motorcycle'].includes(p.class) && p.score > 0.6
-            );
+            const hasVehicle = predictions.some(p => ['car', 'truck', 'bus'].includes(p.class));
 
-            hasVehicle.value = vehicleDetected;
-
-            if (vehicleDetected) {
-                aiStatus.value = "⚡ 發現目標！正在提取車牌...";
-                await captureAndRecognize();
-            } else {
-                aiStatus.value = "掃描中：未發現車輛";
+            if (!hasVehicle) {
+                savedTokens.value++;
+                routeLog.value = "本地 AI: 畫面無車輛";
+                return;
             }
-        };
 
-        const captureAndRecognize = async () => {
-            isAnalyzing.value = true;
-            const video = document.getElementById('video');
-            const canvas = document.getElementById('canvas');
+            // 2. 決定路由 (智能判斷：暫時以人工切換或預設為主)
+            currentRoute.value = isAuto.value ? "hk" : manualTarget.value;
             
+            // 3. 影相並上傳
+            isAnalyzing.value = true;
+            const canvas = document.getElementById('canvas');
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             canvas.getContext('2d').drawImage(video, 0, 0);
 
-            return new Promise((resolve) => {
-                canvas.toBlob(async (blob) => {
-                    const formData = new FormData();
-                    formData.append('upload', blob);
-
-                    try {
-                        const res = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', formData, {
-                            headers: { 'Authorization': `Token ${API_KEY}` }
-                        });
-
-                        tokenUsed.value++; // 記錄 API 使用次數
-
-                        if (res.data.results && res.data.results.length > 0) {
-                            const newPlate = res.data.results[0].plate.toUpperCase();
-                            lastPlate.value = newPlate;
-                            if (window.navigator.vibrate) window.navigator.vibrate(100);
-                            
-                            // 識別成功後暫停一下，避免對著同一架車猛刷 Token
-                            await new Promise(r => setTimeout(r, 3000));
-                        }
-                    } catch (err) {
-                        console.error("API Error:", err);
-                    } finally {
-                        isAnalyzing.value = false;
-                        resolve();
+            canvas.toBlob(async (blob) => {
+                try {
+                    if (currentRoute.value === "cn") {
+                        await callMyRHEL(blob);
+                    } else {
+                        await callPlateRecognizer(blob);
                     }
-                }, 'image/jpeg', 0.7);
-            });
+                } catch (e) {
+                    routeLog.value = "連線出錯";
+                } finally {
+                    isAnalyzing.value = false;
+                }
+            }, 'image/jpeg', 0.8);
         };
 
-        return { lastPlate, isAnalyzing, hasVehicle, modelLoaded, aiStatus, tokenUsed };
+        const callMyRHEL = async (blob) => {
+            routeLog.value = "📡 傳送到 RHEL (HyperLPR)...";
+            const fd = new FormData();
+            fd.append('upload', blob);
+            const res = await axios.post(MY_RHEL_URL, fd);
+            if (res.data.status === "success") {
+                lastResult.value = { plate: res.data.plate, from: 'cn' };
+                routeLog.value = "RHEL 辨識成功";
+                if (window.navigator.vibrate) window.navigator.vibrate(100);
+            }
+        };
+
+        const callPlateRecognizer = async (blob) => {
+            routeLog.value = "📡 傳送到 Plate Recognizer...";
+            const fd = new FormData();
+            fd.append('upload', blob);
+            const res = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', fd, {
+                headers: { 'Authorization': `Token ${PR_TOKEN}` }
+            });
+            if (res.data.results?.length > 0) {
+                lastResult.value = { plate: res.data.results[0].plate.toUpperCase(), from: 'hk' };
+                routeLog.value = "PR 辨識成功";
+                if (window.navigator.vibrate) window.navigator.vibrate(50);
+            }
+        };
+
+        return { lastResult, isAnalyzing, isAuto, manualTarget, currentRoute, aiStatus, routeLog, savedTokens, toggleMode };
     }
 }).mount('#app');
 </script>
