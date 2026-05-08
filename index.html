@@ -3,118 +3,104 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI Hybrid ALPR - Pro Version</title>
+    <title>ALPR Extreme - Dual Engine</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <style>
-        :root { --hk: #ffcc00; --cn: #007bff; --black: #ffffff; --bg: #000; }
-        body { margin: 0; background: var(--bg); color: white; font-family: sans-serif; overflow: hidden; }
+        :root { --cn: #007bff; --hk: #ffcc00; }
+        body { margin: 0; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; }
         #video { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
-        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; pointer-events: none; }
-        .top-nav { padding: 15px; background: rgba(0,0,0,0.8); display: flex; justify-content: center; gap: 8px; pointer-events: auto; }
-        .btn { padding: 10px; border-radius: 8px; border: 1px solid #444; background: #111; color: #777; font-size: 11px; flex: 1; text-align: center; }
-        .btn.active { background: #fff; color: #000; font-weight: bold; }
-        .viewport { flex: 1; display: flex; align-items: center; justify-content: center; }
-        .scan-box { width: 85%; height: 20%; border: 2px solid rgba(255,255,255,0.3); border-radius: 12px; transition: 0.3s; position: relative; }
-        .route-cn { border-color: var(--cn); box-shadow: 0 0 20px var(--cn); }
-        .route-hk { border-color: var(--hk); box-shadow: 0 0 20px var(--hk); }
-        .route-black { border-color: var(--black); box-shadow: 0 0 20px var(--black); }
-        .bottom-panel { padding: 25px; background: rgba(0,0,0,0.9); border-top: 1px solid #333; text-align: center; pointer-events: auto; }
-        .plate-num { font-size: 45px; font-weight: 900; line-height: 1.2; }
-        .status-text { font-size: 10px; color: #555; margin-top: 8px; }
+        .ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; pointer-events: none; }
+        .top { padding: 15px; background: rgba(0,0,0,0.8); display: flex; gap: 10px; pointer-events: auto; }
+        .btn { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #444; background: #222; color: #888; text-align: center; font-size: 12px; font-weight: bold; }
+        .btn.active { background: #fff; color: #000; border-color: #fff; }
+        .box-container { flex: 1; display: flex; align-items: center; justify-content: center; }
+        .scan-box { width: 85%; height: 20%; border: 2px solid #fff; border-radius: 12px; transition: 0.3s; }
+        .mode-cn { border-color: var(--cn); box-shadow: 0 0 20px var(--cn); }
+        .mode-hk { border-color: var(--hk); box-shadow: 0 0 20px var(--hk); }
+        .bottom { padding: 30px; background: rgba(0,0,0,0.9); text-align: center; pointer-events: auto; }
+        .plate-out { font-size: 45px; font-weight: 900; letter-spacing: 2px; min-height: 55px; }
+        .server-msg { font-size: 10px; color: #666; margin-top: 10px; }
     </style>
 </head>
 <body>
 <div id="app">
     <video id="video" autoplay playsinline muted></video>
-    <div class="overlay">
-        <div class="top-nav">
-            <div :class="['btn', mode==='auto'?'active':'']" @click="mode='auto'">AUTO</div>
-            <div :class="['btn', mode==='cn'?'active':'']" @click="mode='cn'">CHINA/粵Z (RHEL)</div>
-            <div :class="['btn', mode==='hk'?'active':'']" @click="mode='hk'">HK/GB (Cloud)</div>
+    <div class="ui">
+        <div class="top">
+            <div :class="['btn', mode==='cn'?'active':'']" @click="mode='cn'">CHINA / 粵Z (RHEL)</div>
+            <div :class="['btn', mode==='hk'?'active':'']" @click="mode='hk'">HK / GB (Cloud)</div>
         </div>
-        <div class="viewport">
-            <div :class="['scan-box', boxClass]">
-                <div v-if="isAnalyzing" style="position:absolute; width:100%; top:45%; text-align:center; font-size:12px;">OCR Processing...</div>
+        <div class="box-container">
+            <div :class="['scan-box', mode==='cn'?'mode-cn':'mode-hk']"></div>
+        </div>
+        <div class="bottom">
+            <div class="plate-out" :style="{color: mode==='cn'? '#007bff' : '#ffcc00'}">
+                {{ lastPlate || 'READY' }}
             </div>
-        </div>
-        <div class="bottom-panel">
-            <div v-if="lastPlate" class="plate-num" :style="{color: plateColor}">{{ lastPlate }}</div>
-            <div v-else style="font-size:30px; font-weight:900; color:#333;">SCANNING</div>
-            <div class="status-text">Server: {{ activeServer }} | Saved: {{ saved }}</div>
+            <div class="server-msg">
+                SERVER: {{ mode==='cn' ? 'RHEL Dual-Engine' : 'Plate Recognizer Cloud' }}
+            </div>
         </div>
     </div>
     <canvas id="canvas" style="display:none;"></canvas>
 </div>
 
 <script>
-const { createApp, ref, onMounted, computed } = Vue;
+const { createApp, ref, onMounted } = Vue;
 createApp({
     setup() {
         const lastPlate = ref("");
-        const isAnalyzing = ref(false);
-        const mode = ref("auto");
-        const autoType = ref("hk");
-        const saved = ref(0);
-        const netReady = ref(false);
+        const isBusy = ref(false);
+        const mode = ref("cn");
         const RHEL_URL = "https://surrey-buyer-think-vegetarian.trycloudflare.com/identify_cn";
         const PR_TOKEN = "ad7d94a0aaef7ff209be02490d3f2748430defed";
 
         onMounted(async () => {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280, height: 720 } });
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment", width: { ideal: 1920 } } 
+            });
             document.getElementById('video').srcObject = stream;
-            const net = await cocoSsd.load();
-            netReady.value = true;
-            setInterval(() => run(net), 1500);
+            // 降低掃描頻率至 2 秒一次，俾 EasyOCR 足夠運算時間
+            setInterval(doOCR, 2000);
         });
 
-        const run = async (net) => {
-            if (isAnalyzing.value || !netReady.value) return;
+        const doOCR = async () => {
+            if (isBusy.value) return;
             const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
             if (video.readyState !== 4) return;
 
-            const pred = await net.detect(video);
-            if (!pred.some(p => ['car','truck','bus'].includes(p.class))) { saved.value++; return; }
+            isBusy.value = true;
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
 
-            const canvas = document.getElementById('canvas');
-            const ctx = canvas.getContext('2d');
-            if (mode.value === "auto") {
-                canvas.width = 100; canvas.height = 100;
-                ctx.drawImage(video, video.videoWidth*0.25, video.videoHeight*0.4, video.videoWidth*0.5, video.videoHeight*0.2, 0, 0, 100, 100);
-                const d = ctx.getImageData(0,0,100,100).data;
-                let b=0, dark=0;
-                for(let i=0; i<d.length; i+=4) {
-                    if (d[i+2] > d[i]+15) b++;
-                    if (d[i]<50 && d[i+1]<50 && d[i+2]<50) dark++;
-                }
-                autoType.value = (b>1200) ? "cn" : (dark>3000 ? "black" : "hk");
-            }
-
-            isAnalyzing.value = true;
-            canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-            ctx.drawImage(video, 0, 0);
             canvas.toBlob(async (blob) => {
-                const useRHEL = mode.value === "cn" || (mode.value === "auto" && (autoType.value === "cn" || autoType.value === "black"));
+                const fd = new FormData();
+                fd.append('upload', blob);
                 try {
-                    const fd = new FormData(); fd.append('upload', blob);
-                    if (useRHEL) {
+                    if (mode.value === 'cn') {
                         const res = await axios.post(RHEL_URL, fd);
-                        if (res.data.status === "success") lastPlate.value = res.data.plate;
+                        if (res.data.status === 'success') {
+                            lastPlate.value = res.data.plate;
+                        }
                     } else {
-                        const res = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', fd, { headers: { 'Authorization': `Token ${PR_TOKEN}` } });
-                        if (res.data.results?.length > 0) lastPlate.value = res.data.results[0].plate.toUpperCase();
+                        const res = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', fd, {
+                            headers: { 'Authorization': `Token ${PR_TOKEN}` }
+                        });
+                        if (res.data.results.length > 0) {
+                            lastPlate.value = res.data.results[0].plate.toUpperCase();
+                        }
                     }
-                } finally { isAnalyzing.value = false; }
+                } catch (e) {
+                    console.error("Connection Error");
+                } finally {
+                    isBusy.value = false;
+                }
             }, 'image/jpeg', 0.95);
         };
-
-        const boxClass = computed(() => `route-${mode.value === 'auto' ? autoType.value : (mode.value==='cn'?'cn':'hk')}`);
-        const activeServer = computed(() => (mode.value==='cn' || (mode.value==='auto' && (autoType.value==='cn'||autoType.value==='black'))) ? 'RHEL (HyperLPR)' : 'Cloud (PR)');
-        const plateColor = computed(() => activeServer.value.includes('RHEL') ? '#007bff' : '#ffcc00');
-
-        return { lastPlate, isAnalyzing, mode, saved, boxClass, activeServer, plateColor };
+        return { lastPlate, mode, isBusy };
     }
 }).mount('#app');
 </script>
