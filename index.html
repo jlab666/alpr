@@ -3,65 +3,47 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI Hybrid ALPR - Full Update</title>
+    <title>AI Hybrid ALPR - Pro Version</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <style>
-        :root { --hk-color: #ffcc00; --cn-color: #007bff; --black-color: #ffffff; --bg: #000; }
-        body { margin: 0; background: var(--bg); color: white; font-family: -apple-system, sans-serif; overflow: hidden; }
+        :root { --hk: #ffcc00; --cn: #007bff; --black: #ffffff; --bg: #000; }
+        body { margin: 0; background: var(--bg); color: white; font-family: sans-serif; overflow: hidden; }
         #video { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
-        
         .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; pointer-events: none; }
-        
-        /* 頂部切換區 */
         .top-nav { padding: 15px; background: rgba(0,0,0,0.8); display: flex; justify-content: center; gap: 8px; pointer-events: auto; }
-        .mode-btn { 
-            padding: 10px 12px; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #888; 
-            font-size: 11px; cursor: pointer; transition: all 0.2s; text-align: center; flex: 1;
-        }
-        .mode-btn.active { background: #fff; color: #000; border-color: #fff; font-weight: bold; transform: scale(1.05); }
-
+        .btn { padding: 10px; border-radius: 8px; border: 1px solid #444; background: #111; color: #777; font-size: 11px; flex: 1; text-align: center; }
+        .btn.active { background: #fff; color: #000; font-weight: bold; }
         .viewport { flex: 1; display: flex; align-items: center; justify-content: center; }
-        .scan-box { 
-            width: 85%; height: 20%; border: 2px solid rgba(255,255,255,0.3); 
-            border-radius: 12px; position: relative; transition: all 0.3s;
-        }
-        /* 邊框顏色隨模式變化 */
-        .route-cn { border-color: var(--cn-color); box-shadow: 0 0 25px var(--cn-color); }
-        .route-hk { border-color: var(--hk-color); box-shadow: 0 0 25px var(--hk-color); }
-        .route-black { border-color: var(--black-color); box-shadow: 0 0 25px var(--black-color); }
-
-        .bottom-panel { padding: 30px; background: rgba(0,0,0,0.9); border-top: 1px solid #333; text-align: center; pointer-events: auto; }
-        .plate-num { font-size: 45px; font-weight: 900; letter-spacing: 1px; line-height: 1.2; margin-bottom: 5px; }
-        .server-tag { font-size: 10px; padding: 2px 8px; border-radius: 4px; display: inline-block; margin-bottom: 8px; background: #333; color: #aaa; }
-        .info-msg { font-size: 11px; color: #555; }
+        .scan-box { width: 85%; height: 20%; border: 2px solid rgba(255,255,255,0.3); border-radius: 12px; transition: 0.3s; position: relative; }
+        .route-cn { border-color: var(--cn); box-shadow: 0 0 20px var(--cn); }
+        .route-hk { border-color: var(--hk); box-shadow: 0 0 20px var(--hk); }
+        .route-black { border-color: var(--black); box-shadow: 0 0 20px var(--black); }
+        .bottom-panel { padding: 25px; background: rgba(0,0,0,0.9); border-top: 1px solid #333; text-align: center; pointer-events: auto; }
+        .plate-num { font-size: 45px; font-weight: 900; line-height: 1.2; }
+        .status-text { font-size: 10px; color: #555; margin-top: 8px; }
     </style>
 </head>
 <body>
-
 <div id="app">
     <video id="video" autoplay playsinline muted></video>
-    
     <div class="overlay">
         <div class="top-nav">
-            <div :class="['mode-btn', configMode === 'auto' ? 'active' : '']" @click="configMode = 'auto'">AUTO<br>自動分流</div>
-            <div :class="['mode-btn', configMode === 'cn' ? 'active' : '']" @click="configMode = 'cn'">CHINA / 黑牌<br>(漢字優先)</div>
-            <div :class="['mode-btn', configMode === 'hk' ? 'active' : '']" @click="configMode = 'hk'">HK / GB<br>(英數雲端)</div>
+            <div :class="['btn', mode==='auto'?'active':'']" @click="mode='auto'">AUTO</div>
+            <div :class="['btn', mode==='cn'?'active':'']" @click="mode='cn'">CHINA/粵Z (RHEL)</div>
+            <div :class="['btn', mode==='hk'?'active':'']" @click="mode='hk'">HK/GB (Cloud)</div>
         </div>
-
         <div class="viewport">
-            <div :class="['scan-box', currentRouteClass]">
-                <div v-if="isAnalyzing" style="position:absolute; width:100%; top:45%; text-align:center; font-size:12px; color:white; background:rgba(0,0,0,0.5);">OCR 正在辨識漢字...</div>
+            <div :class="['scan-box', boxClass]">
+                <div v-if="isAnalyzing" style="position:absolute; width:100%; top:45%; text-align:center; font-size:12px;">OCR Processing...</div>
             </div>
         </div>
-
         <div class="bottom-panel">
-            <div class="server-tag">{{ activeServerName }}</div>
             <div v-if="lastPlate" class="plate-num" :style="{color: plateColor}">{{ lastPlate }}</div>
-            <div v-else style="color:#444; font-size: 32px; font-weight: 900;">SCANNING</div>
-            <div class="info-msg">已節省 Token: {{ savedCount }} | RHEL 網址: {{ tunnelStatus }}</div>
+            <div v-else style="font-size:30px; font-weight:900; color:#333;">SCANNING</div>
+            <div class="status-text">Server: {{ activeServer }} | Saved: {{ saved }}</div>
         </div>
     </div>
     <canvas id="canvas" style="display:none;"></canvas>
@@ -69,124 +51,70 @@
 
 <script>
 const { createApp, ref, onMounted, computed } = Vue;
-
 createApp({
     setup() {
         const lastPlate = ref("");
         const isAnalyzing = ref(false);
-        const configMode = ref("auto"); 
-        const autoDetectedType = ref("hk"); 
-        const savedCount = ref(0);
-        const modelReady = ref(false);
-        const tunnelStatus = ref("Ready");
-        
+        const mode = ref("auto");
+        const autoType = ref("hk");
+        const saved = ref(0);
+        const netReady = ref(false);
+        const RHEL_URL = "https://surrey-buyer-think-vegetarian.trycloudflare.com/identify_cn";
         const PR_TOKEN = "ad7d94a0aaef7ff209be02490d3f2748430defed";
-        const MY_RHEL_URL = "https://surrey-buyer-think-vegetarian.trycloudflare.com/identify_cn";
 
         onMounted(async () => {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } } 
-                });
-                document.getElementById('video').srcObject = stream;
-                const net = await cocoSsd.load();
-                modelReady.value = true;
-                setInterval(() => mainProcess(net), 1500);
-            } catch (e) {
-                tunnelStatus.value = "Camera Error";
-            }
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280, height: 720 } });
+            document.getElementById('video').srcObject = stream;
+            const net = await cocoSsd.load();
+            netReady.value = true;
+            setInterval(() => run(net), 1500);
         });
 
-        const mainProcess = async (net) => {
-            if (isAnalyzing.value || !modelReady.value) return;
+        const run = async (net) => {
+            if (isAnalyzing.value || !netReady.value) return;
             const video = document.getElementById('video');
-            const canvas = document.getElementById('canvas');
             if (video.readyState !== 4) return;
 
-            // 1. 本地過濾：節省 API 成本
-            const predictions = await net.detect(video);
-            if (!predictions.some(p => ['car','truck','bus'].includes(p.class))) {
-                savedCount.value++;
-                return;
-            }
+            const pred = await net.detect(video);
+            if (!pred.some(p => ['car','truck','bus'].includes(p.class))) { saved.value++; return; }
 
-            // 2. 自動模式顏色分析
-            if (configMode.value === "auto") {
-                const ctx = canvas.getContext('2d');
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            if (mode.value === "auto") {
                 canvas.width = 100; canvas.height = 100;
                 ctx.drawImage(video, video.videoWidth*0.25, video.videoHeight*0.4, video.videoWidth*0.5, video.videoHeight*0.2, 0, 0, 100, 100);
-                const data = ctx.getImageData(0, 0, 100, 100).data;
-                
+                const d = ctx.getImageData(0,0,100,100).data;
                 let b=0, dark=0;
-                for(let i=0; i<data.length; i+=4) {
-                    if (data[i+2] > data[i] + 15) b++;
-                    if (data[i] < 50 && data[i+1] < 50 && data[i+2] < 50) dark++;
+                for(let i=0; i<d.length; i+=4) {
+                    if (d[i+2] > d[i]+15) b++;
+                    if (d[i]<50 && d[i+1]<50 && d[i+2]<50) dark++;
                 }
-                autoDetectedType.value = (b > 1200) ? "cn" : (dark > 3000 ? "black" : "hk");
+                autoType.value = (b>1200) ? "cn" : (dark>3000 ? "black" : "hk");
             }
 
-            // 3. 高清抓圖並發送
             isAnalyzing.value = true;
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
+            canvas.width = video.videoWidth; canvas.height = video.videoHeight;
             ctx.drawImage(video, 0, 0);
-
             canvas.toBlob(async (blob) => {
+                const useRHEL = mode.value === "cn" || (mode.value === "auto" && (autoType.value === "cn" || autoType.value === "black"));
                 try {
-                    const useRHEL = configMode.value === "cn" || (configMode.value === "auto" && (autoDetectedType.value === "cn" || autoDetectedType.value === "black"));
-                    
+                    const fd = new FormData(); fd.append('upload', blob);
                     if (useRHEL) {
-                        await callRHEL(blob);
+                        const res = await axios.post(RHEL_URL, fd);
+                        if (res.data.status === "success") lastPlate.value = res.data.plate;
                     } else {
-                        await callPR(blob);
+                        const res = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', fd, { headers: { 'Authorization': `Token ${PR_TOKEN}` } });
+                        if (res.data.results?.length > 0) lastPlate.value = res.data.results[0].plate.toUpperCase();
                     }
-                } catch (err) {
-                    console.error("API Error", err);
-                } finally {
-                    isAnalyzing.value = false;
-                }
-            }, 'image/jpeg', 0.95); // 極高品質確保漢字清晰
+                } finally { isAnalyzing.value = false; }
+            }, 'image/jpeg', 0.95);
         };
 
-        const callRHEL = async (blob) => {
-            const fd = new FormData();
-            fd.append('upload', blob);
-            try {
-                const res = await axios.post(MY_RHEL_URL, fd);
-                if (res.data.status === "success") {
-                    lastPlate.value = res.data.plate; // 這裡將會顯示含有漢字的結果
-                    if (window.navigator.vibrate) window.navigator.vibrate(100);
-                }
-            } catch (e) { tunnelStatus.value = "RHEL Offline"; }
-        };
+        const boxClass = computed(() => `route-${mode.value === 'auto' ? autoType.value : (mode.value==='cn'?'cn':'hk')}`);
+        const activeServer = computed(() => (mode.value==='cn' || (mode.value==='auto' && (autoType.value==='cn'||autoType.value==='black'))) ? 'RHEL (HyperLPR)' : 'Cloud (PR)');
+        const plateColor = computed(() => activeServer.value.includes('RHEL') ? '#007bff' : '#ffcc00');
 
-        const callPR = async (blob) => {
-            const fd = new FormData();
-            fd.append('upload', blob);
-            const res = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', fd, {
-                headers: { 'Authorization': `Token ${PR_TOKEN}` }
-            });
-            if (res.data.results?.length > 0) {
-                lastPlate.value = res.data.results[0].plate.toUpperCase();
-                if (window.navigator.vibrate) window.navigator.vibrate(50);
-            }
-        };
-
-        const currentRouteClass = computed(() => {
-            const type = configMode.value === 'auto' ? autoDetectedType.value : (configMode.value === 'cn' ? 'black' : 'hk');
-            return `route-${type}`;
-        });
-        const activeServerName = computed(() => {
-            const useRHEL = configMode.value === "cn" || (configMode.value === "auto" && (autoDetectedType.value === "cn" || autoDetectedType.value === "black"));
-            return useRHEL ? "RHEL SERVER (漢字/黑牌優先)" : "CLOUD SERVER (英數模式)";
-        });
-        const plateColor = computed(() => {
-            const useRHEL = configMode.value === "cn" || (configMode.value === "auto" && (autoDetectedType.value === "cn" || autoDetectedType.value === "black"));
-            return useRHEL ? "#007bff" : "#ffcc00";
-        });
-
-        return { lastPlate, isAnalyzing, configMode, savedCount, modelReady, tunnelStatus, currentRouteClass, activeServerName, plateColor };
+        return { lastPlate, isAnalyzing, mode, saved, boxClass, activeServer, plateColor };
     }
 }).mount('#app');
 </script>
