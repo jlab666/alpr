@@ -1,108 +1,33 @@
-<!DOCTYPE html>
-<html lang="zh-Hant">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ALPR Extreme - Dual Engine</title>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-    <style>
-        :root { --cn: #007bff; --hk: #ffcc00; }
-        body { margin: 0; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; }
-        #video { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
-        .ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; pointer-events: none; }
-        .top { padding: 15px; background: rgba(0,0,0,0.8); display: flex; gap: 10px; pointer-events: auto; }
-        .btn { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #444; background: #222; color: #888; text-align: center; font-size: 12px; font-weight: bold; }
-        .btn.active { background: #fff; color: #000; border-color: #fff; }
-        .box-container { flex: 1; display: flex; align-items: center; justify-content: center; }
-        .scan-box { width: 85%; height: 20%; border: 2px solid #fff; border-radius: 12px; transition: 0.3s; }
-        .mode-cn { border-color: var(--cn); box-shadow: 0 0 20px var(--cn); }
-        .mode-hk { border-color: var(--hk); box-shadow: 0 0 20px var(--hk); }
-        .bottom { padding: 30px; background: rgba(0,0,0,0.9); text-align: center; pointer-events: auto; }
-        .plate-out { font-size: 45px; font-weight: 900; letter-spacing: 2px; min-height: 55px; }
-        .server-msg { font-size: 10px; color: #666; margin-top: 10px; }
-    </style>
-</head>
-<body>
-<div id="app">
-    <video id="video" autoplay playsinline muted></video>
-    <div class="ui">
-        <div class="top">
-            <div :class="['btn', mode==='cn'?'active':'']" @click="mode='cn'">CHINA / 粵Z (RHEL)</div>
-            <div :class="['btn', mode==='hk'?'active':'']" @click="mode='hk'">HK / GB (Cloud)</div>
-        </div>
-        <div class="box-container">
-            <div :class="['scan-box', mode==='cn'?'mode-cn':'mode-hk']"></div>
-        </div>
-        <div class="bottom">
-            <div class="plate-out" :style="{color: mode==='cn'? '#007bff' : '#ffcc00'}">
-                {{ lastPlate || 'READY' }}
-            </div>
-            <div class="server-msg">
-                SERVER: {{ mode==='cn' ? 'RHEL Dual-Engine' : 'Plate Recognizer Cloud' }}
-            </div>
-        </div>
-    </div>
-    <canvas id="canvas" style="display:none;"></canvas>
-</div>
-
 <script>
-const { createApp, ref, onMounted } = Vue;
-createApp({
-    setup() {
-        const lastPlate = ref("");
-        const isBusy = ref(false);
-        const mode = ref("cn");
-        const RHEL_URL = "https://surrey-buyer-think-vegetarian.trycloudflare.com/identify_cn";
-        const PR_TOKEN = "ad7d94a0aaef7ff209be02490d3f2748430defed";
 
-        onMounted(async () => {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: "environment", width: { ideal: 1920 } } 
-            });
-            document.getElementById('video').srcObject = stream;
-            // 降低掃描頻率至 2 秒一次，俾 EasyOCR 足夠運算時間
-            setInterval(doOCR, 2000);
-        });
+const BASE_URL = "https://surrey-buyer-think-vegetarian.trycloudflare.com";
+const PATH_A = "/identify_cn";   // 
+const PATH_B = "/identify_intl"; // 
 
-        const doOCR = async () => {
-            if (isBusy.value) return;
-            const video = document.getElementById('video');
-            const canvas = document.getElementById('canvas');
-            if (video.readyState !== 4) return;
-
-            isBusy.value = true;
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            canvas.getContext('2d').drawImage(video, 0, 0);
-
-            canvas.toBlob(async (blob) => {
-                const fd = new FormData();
-                fd.append('upload', blob);
-                try {
-                    if (mode.value === 'cn') {
-                        const res = await axios.post(RHEL_URL, fd);
-                        if (res.data.status === 'success') {
-                            lastPlate.value = res.data.plate;
-                        }
-                    } else {
-                        const res = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', fd, {
-                            headers: { 'Authorization': `Token ${PR_TOKEN}` }
-                        });
-                        if (res.data.results.length > 0) {
-                            lastPlate.value = res.data.results[0].plate.toUpperCase();
-                        }
-                    }
-                } catch (e) {
-                    console.error("Connection Error");
-                } finally {
-                    isBusy.value = false;
-                }
-            }, 'image/jpeg', 0.95);
-        };
-        return { lastPlate, mode, isBusy };
-    }
-}).mount('#app');
+// 簡化後的呼叫邏輯
+const tk = async () => {
+    if (b.value) return;
+    // ... 前略 (圖像抓取部分保持不變) ...
+    
+    cv.toBlob(async (bl) => {
+        const isAreaA = m.value === 'c' || (m.value === 'a' && at.value === 'c');
+        const targetPath = isAreaA ? PATH_A : PATH_B;
+        
+        try {
+            const f = new FormData(); 
+            f.append('upload', bl);
+            
+            // Call backend-server
+            const s = await axios.post(BASE_URL + targetPath, f);
+            
+            if (s.data.status === 'success') {
+                r.value = s.data.plate;
+            }
+        } catch (e) {
+            console.log("System offline");
+        } finally {
+            b.value = false;
+        }
+    }, 'image/jpeg', 0.85);
+};
 </script>
-</body>
-</html>
