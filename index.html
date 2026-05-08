@@ -1,33 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ALPR System</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        body { margin: 0; background: #000; color: #fff; text-align: center; font-family: sans-serif; }
+        #v { width: 100vw; height: 60vh; object-fit: cover; }
+        .res { font-size: 40px; padding: 20px; color: #ffcc00; }
+        .btn-group { display: flex; padding: 10px; gap: 5px; }
+        .btn { flex: 1; padding: 15px; background: #333; border: 1px solid #555; color: #fff; }
+        .active { background: #fff; color: #000; }
+    </style>
+</head>
+<body>
+<div id="app">
+    <video id="v" autoplay playsinline muted></video>
+    <div class="btn-group">
+        <button class="btn" :class="{active: m==='c'}" @click="m='c'">ZONE A</button>
+        <button class="btn" :class="{active: m==='h'}" @click="m='h'">ZONE B</button>
+    </div>
+    <div class="res">{{ r || 'WAITING...' }}</div>
+    <canvas id="c" style="display:none;"></canvas>
+</div>
+
 <script>
+const { createApp, ref, onMounted } = Vue;
+createApp({
+    setup() {
+        const r = ref(""), m = ref("c"), b = ref(false);
+        const BASE = "https://surrey-buyer-think-vegetarian.trycloudflare.com";
 
-const BASE_URL = "https://surrey-buyer-think-vegetarian.trycloudflare.com";
-const PATH_A = "/identify_cn";   // 
-const PATH_B = "/identify_intl"; // 
+        onMounted(async () => {
+            const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+            document.getElementById('v').srcObject = s;
+            setInterval(scan, 3000);
+        });
 
-// 簡化後的呼叫邏輯
-const tk = async () => {
-    if (b.value) return;
-    // ... 前略 (圖像抓取部分保持不變) ...
-    
-    cv.toBlob(async (bl) => {
-        const isAreaA = m.value === 'c' || (m.value === 'a' && at.value === 'c');
-        const targetPath = isAreaA ? PATH_A : PATH_B;
-        
-        try {
-            const f = new FormData(); 
-            f.append('upload', bl);
-            
-            // Call backend-server
-            const s = await axios.post(BASE_URL + targetPath, f);
-            
-            if (s.data.status === 'success') {
-                r.value = s.data.plate;
-            }
-        } catch (e) {
-            console.log("System offline");
-        } finally {
-            b.value = false;
-        }
-    }, 'image/jpeg', 0.85);
-};
+        const scan = async () => {
+            if (b.value) return;
+            const v = document.getElementById('v'), cv = document.getElementById('c');
+            b.value = true;
+            cv.width = 800; cv.height = v.videoHeight * (800/v.videoWidth);
+            cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+            cv.toBlob(async (blob) => {
+                const fd = new FormData(); fd.append('upload', blob);
+                try {
+                    const path = m.value === 'c' ? "/identify_cn" : "/identify_intl";
+                    const res = await axios.post(BASE + path, fd);
+                    if (res.data.status === 'success') r.value = res.data.plate;
+                } catch (e) { console.error("Error"); }
+                finally { b.value = false; }
+            }, 'image/jpeg', 0.8);
+        };
+        return { r, m, b };
+    }
+}).mount('#app');
 </script>
+</body>
+</html>
