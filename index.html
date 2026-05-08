@@ -3,77 +3,83 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI Plate Instant Stream</title>
+    <title>AI Smart LPR - TFJS Filter</title>
+    
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+
     <style>
-        :root { --primary: #00ff88; --bg: #000; }
+        :root { --primary: #00ff88; --warn: #ffcc00; --bg: #000; }
         body { margin: 0; background: var(--bg); color: white; font-family: -apple-system, sans-serif; overflow: hidden; }
         
         #video { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
 
-        /* 掃描對準框 */
         .scan-layer {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             pointer-events: none;
         }
+        
+        /* 增加掃描框顏色變化 */
         .scan-box {
-            width: 80%; height: 25%; border: 2px solid var(--primary);
-            border-radius: 15px; box-shadow: 0 0 20px rgba(0, 255, 136, 0.4);
-            position: relative;
+            width: 80%; height: 25%; border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 15px; position: relative; transition: all 0.3s;
         }
+        .scan-box.detecting { border-color: var(--warn); box-shadow: 0 0 15px var(--warn); }
+        .scan-box.identifying { border-color: var(--primary); box-shadow: 0 0 20px var(--primary); }
+
         .scan-line {
             position: absolute; width: 100%; height: 2px; background: var(--primary);
-            top: 0; animation: scan 2s linear infinite;
+            top: 0; animation: scan 2s linear infinite; display: none;
         }
+        .identifying .scan-line { display: block; }
+
         @keyframes scan { from { top: 0; } to { top: 100%; } }
 
-        /* 即時結果浮現 */
         .instant-result {
-            margin-top: 30px;
-            background: rgba(0, 255, 136, 0.9);
-            color: #000;
-            padding: 10px 30px;
-            border-radius: 50px;
-            font-size: 32px;
-            font-weight: 900;
-            letter-spacing: 2px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-            animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            margin-top: 30px; background: var(--primary); color: #000;
+            padding: 10px 30px; border-radius: 50px; font-size: 32px;
+            font-weight: 900; letter-spacing: 2px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
-        @keyframes popIn { from { transform: scale(0.5); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
-        .status-dot {
-            position: absolute; top: 20px; left: 20px;
-            display: flex; align-items: center; gap: 8px; font-size: 12px;
+        .status-ui {
+            position: absolute; top: 20px; left: 20px; right: 20px;
+            display: flex; justify-content: space-between; align-items: center;
+            font-size: 12px; background: rgba(0,0,0,0.5); padding: 8px 15px; border-radius: 20px;
         }
-        .dot { width: 10px; height: 10px; background: #555; border-radius: 50%; }
-        .dot.active { background: var(--primary); box-shadow: 0 0 10px var(--primary); }
+        .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .dot.red { background: #ff4444; }
+        .dot.green { background: var(--primary); }
     </style>
 </head>
 <body>
 
 <div id="app">
-    <video id="video" autoplay playsinline></video>
+    <video id="video" autoplay playsinline muted></video>
     
     <div class="scan-layer">
-        <div class="scan-box">
+        <div :class="['scan-box', hasVehicle ? 'detecting' : '', isAnalyzing ? 'identifying' : '']">
             <div class="scan-line"></div>
         </div>
 
-        <!-- 辨識到就即刻喺呢度顯示號碼 -->
         <div v-if="lastPlate" class="instant-result">
             {{ lastPlate }}
         </div>
-        <div v-else style="margin-top: 20px; color: rgba(255,255,255,0.5)">
-            {{ isAnalyzing ? '🔍 正在辨識中...' : '請對準車牌' }}
+        
+        <div style="margin-top: 20px; color: #fff; font-size: 14px; background: rgba(0,0,0,0.6); padding: 5px 15px; border-radius: 10px;">
+            {{ aiStatus }}
         </div>
     </div>
 
-    <div class="status-dot">
-        <div :class="['dot', isAnalyzing ? 'active' : '']"></div>
-        <span>{{ isAnalyzing ? 'AI STREAMING' : 'READY' }}</span>
+    <div class="status-ui">
+        <div>
+            <span :class="['dot', modelLoaded ? 'green' : 'red']"></span>
+            本地 AI: {{ modelLoaded ? 'ON' : 'LOADING' }}
+        </div>
+        <div>已呼叫 API: {{ tokenUsed }} 次</div>
     </div>
     
     <canvas id="canvas" style="display:none;"></canvas>
@@ -86,60 +92,103 @@ createApp({
     setup() {
         const lastPlate = ref("");
         const isAnalyzing = ref(false);
-        const API_KEY = "ad7d94a0aaef7ff209be02490d3f2748430defed"; // 根據你截圖證實可用
+        const hasVehicle = ref(false);
+        const modelLoaded = ref(false);
+        const aiStatus = ref("正在初始化本地 AI...");
+        const tokenUsed = ref(0);
+        
+        let net = null;
+        const API_KEY = "ad7d94a0aaef7ff209be02490d3f2748430defed";
 
         onMounted(async () => {
             await initCamera();
-            // 每 1.5 秒自動影一張送去 API
-            setInterval(autoStreamScan, 1500);
+            await loadLocalAI();
+            // 開始循環監測 (本地偵測可以跑快啲，因為唔洗錢)
+            setInterval(smartScanner, 800); 
         });
+
+        const loadLocalAI = async () => {
+            try {
+                // 加載輕量級 COCO-SSD 模型
+                net = await cocoSsd.load();
+                modelLoaded.value = true;
+                aiStatus.value = "等待偵測車輛...";
+            } catch (e) {
+                aiStatus.value = "AI 加載失敗，請檢查網絡";
+            }
+        };
 
         const initCamera = async () => {
             const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: "environment", width: 1280, height: 720 } 
+                video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } 
             });
             document.getElementById('video').srcObject = stream;
         };
 
-        const autoStreamScan = async () => {
-            if (isAnalyzing.value) return;
-            
+        const smartScanner = async () => {
+            if (!modelLoaded.value || isAnalyzing.value) return;
+
             const video = document.getElementById('video');
-            const canvas = document.getElementById('canvas');
             if (video.readyState !== 4) return;
 
+            // --- STEP 1: 本地 AI 預檢 (FREE) ---
+            const predictions = await net.detect(video);
+            
+            // 檢查有沒有車輛類目標
+            const vehicleDetected = predictions.some(p => 
+                ['car', 'truck', 'bus', 'motorcycle'].includes(p.class) && p.score > 0.6
+            );
+
+            hasVehicle.value = vehicleDetected;
+
+            if (vehicleDetected) {
+                aiStatus.value = "⚡ 發現目標！正在提取車牌...";
+                await captureAndRecognize();
+            } else {
+                aiStatus.value = "掃描中：未發現車輛";
+            }
+        };
+
+        const captureAndRecognize = async () => {
+            isAnalyzing.value = true;
+            const video = document.getElementById('video');
+            const canvas = document.getElementById('canvas');
+            
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             canvas.getContext('2d').drawImage(video, 0, 0);
 
-            isAnalyzing.value = true;
+            return new Promise((resolve) => {
+                canvas.toBlob(async (blob) => {
+                    const formData = new FormData();
+                    formData.append('upload', blob);
 
-            canvas.toBlob(async (blob) => {
-                const formData = new FormData();
-                formData.append('upload', blob);
+                    try {
+                        const res = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', formData, {
+                            headers: { 'Authorization': `Token ${API_KEY}` }
+                        });
 
-                try {
-                    const res = await axios.post('https://api.platerecognizer.com/v1/plate-reader/', formData, {
-                        headers: { 'Authorization': `Token ${API_KEY}` }
-                    });
+                        tokenUsed.value++; // 記錄 API 使用次數
 
-                    if (res.data.results && res.data.results.length > 0) {
-                        const newPlate = res.data.results[0].plate.toUpperCase();
-                        // 只有當認到新車牌或結果唔同先更新，避免畫面閃爍
-                        if (lastPlate.value !== newPlate) {
+                        if (res.data.results && res.data.results.length > 0) {
+                            const newPlate = res.data.results[0].plate.toUpperCase();
                             lastPlate.value = newPlate;
-                            if (window.navigator.vibrate) window.navigator.vibrate(50);
+                            if (window.navigator.vibrate) window.navigator.vibrate(100);
+                            
+                            // 識別成功後暫停一下，避免對著同一架車猛刷 Token
+                            await new Promise(r => setTimeout(r, 3000));
                         }
+                    } catch (err) {
+                        console.error("API Error:", err);
+                    } finally {
+                        isAnalyzing.value = false;
+                        resolve();
                     }
-                } catch (err) {
-                    console.error("Stream Error:", err);
-                } finally {
-                    isAnalyzing.value = false;
-                }
-            }, 'image/jpeg', 0.7);
+                }, 'image/jpeg', 0.7);
+            });
         };
 
-        return { lastPlate, isAnalyzing };
+        return { lastPlate, isAnalyzing, hasVehicle, modelLoaded, aiStatus, tokenUsed };
     }
 }).mount('#app');
 </script>
