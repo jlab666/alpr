@@ -6,28 +6,27 @@
     <title>Adroit+ ALPR App</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    
+    <!-- loging tfjs core，then coco-ssd -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+
     <style>
         :root { --p1: #007bff; --p2: #ffcc00; --active: #00ff00; }
-        body { margin: 0; background: #000; color: #fff; font-family: monospace; overflow: hidden; }
+        body { margin: 0; background: #000; color: #fff; font-family: 'Courier New', Courier, monospace; overflow: hidden; }
         #v { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
         .ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; pointer-events: none; }
         .nav { padding: 15px; background: rgba(0,0,0,0.85); display: flex; gap: 10px; pointer-events: auto; }
         .btn { flex: 1; padding: 12px; border-radius: 10px; background: #1a1a1a; color: #666; border: 1px solid #333; font-size: 11px; font-weight: bold; text-align: center; }
         .btn.active { background: #fff; color: #000; border-color: #fff; }
         .vp { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; }
-        
-        .box { width: 80%; height: 22%; border: 2px solid rgba(255,255,255,0.2); border-radius: 15px; transition: 0.1s; position: relative; }
-        /* 只要偵測到目標就變綠框 */
+        .box { width: 85%; height: 25%; border: 2px solid rgba(255,255,255,0.2); border-radius: 15px; transition: 0.1s; position: relative; }
         .is-target { border-color: var(--active) !important; border-width: 4px; box-shadow: 0 0 25px var(--active); }
-        
         .loader { position: absolute; width: 50px; height: 50px; border: 4px solid transparent; border-top-color: #fff; border-radius: 50%; animation: sp 1s linear infinite; display: none; }
         .busy .loader { display: block; }
         @keyframes sp { to { transform: rotate(360deg); } }
-        
         .pnl { padding: 20px; background: rgba(0,0,0,0.9); text-align: center; pointer-events: auto; }
-        .debug-note { font-size: 11px; color: #00ff00; margin-bottom: 5px; min-height: 14px; font-family: monospace; }
+        .debug-note { font-size: 11px; color: #00ff00; margin-bottom: 5px; min-height: 14px; }
         .num { font-size: 50px; font-weight: 900; min-height: 62px; letter-spacing: 2px; }
         .st { font-size: 9px; color: #555; }
     </style>
@@ -37,8 +36,8 @@
     <video id="v" autoplay playsinline muted></video>
     <div :class="['ui', b ? 'busy' : '']">
         <div class="nav">
-            <div :class="['btn', m==='c'?'active':'']" @click="m='c'">ZONE A (CN)</div>
-            <div :class="['btn', m==='h'?'active':'']" @click="m='h'">ZONE B (INTL)</div>
+            <div :class="['btn', m==='c'?'active':'']" @click="m='c'">ZONE A (中國/中港車牌)</div>
+            <div :class="['btn', m==='h'?'active':'']" @click="m='h'">ZONE B (香港/英國車牌)</div>
         </div>
         <div class="vp">
             <div :class="['box', { 'is-target': hasObj }]"></div>
@@ -47,7 +46,7 @@
         <div class="pnl">
             <div class="debug-note">[[ {{ debugNote }} ]]</div>
             <div class="num" :style="{color: rc}">{{ r || '---' }}</div>
-            <div class="st">AI ACTIVE | TARGETING: {{ hasObj ? 'LOCKED' : 'SEARCHING' }}</div>
+            <div class="st">ENDPOINT: alpr.cloudence.uk | {{ b ? 'IDENTIFYING' : 'READY' }}</div>
         </div>
     </div>
     <canvas id="c" style="display:none;"></canvas>
@@ -58,62 +57,63 @@ const { createApp, ref, onMounted, computed } = Vue;
 createApp({
     setup() {
         const r = ref(""), b = ref(false), m = ref("c");
-        const ready = ref(false), hasObj = ref(false), debugNote = ref("AI STARTING...");
+        const ready = ref(false), hasObj = ref(false), debugNote = ref("WAITING FOR TFJS...");
         const BASE = "https://alpr.cloudence.uk";
-
-        // 用於穩定偵測的計數器
-        let stableFrames = 0;
 
         onMounted(async () => {
             try {
+                // 1. Make sure TensorFlow loaded
+                if (typeof tf === 'undefined') {
+                    debugNote.value = "ERROR: TFJS NOT FOUND";
+                    return;
+                }
+
+                // 2. Camera Request
                 const s = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: "environment", width: { ideal: 1280 } } 
                 });
                 document.getElementById('v').srcObject = s;
                 
+                // 3. LLM Loading
+                debugNote.value = "LOADING COCO-SSD...";
                 const net = await cocoSsd.load();
                 ready.value = true;
-                debugNote.value = "SCANNING...";
+                debugNote.value = "ALPR ONLINE - SCANNING";
                 
                 const detectLoop = async () => {
-                    if (!b.value) {
+                    if (!b.value && ready.value) {
                         const v = document.getElementById('v');
                         if (v.readyState === 4) {
                             const preds = await net.detect(v);
                             
-                            // 靈敏偵測：包含車輛、或任何可能被誤認為車牌的矩形標籤 (如 handbag, book, laptop)
+                            // Detect Car
                             const target = preds.find(p => 
-                                ['car','truck','bus','motorcycle','handbag','book','laptop'].includes(p.class) && p.score > 0.35
+                                ['car','truck','bus','motorcycle','handbag','book'].includes(p.class) && p.score > 0.35
                             );
                             
                             if (target) {
-                                debugNote.value = `DETECTED: ${target.class} (${Math.round(target.score*100)}%)`;
+                                debugNote.value = `DETECTED: ${target.class.toUpperCase()} (${Math.round(target.score*100)}%)`;
                                 hasObj.value = true;
-                                stableFrames++;
-                                
-                                // 只要連續偵測到目標 3 幀 (約 0.3-0.5 秒)，就立即觸發
-                                if (stableFrames >= 3) {
-                                    triggerOCR();
-                                    stableFrames = 0;
-                                }
+                                triggerOCR();
                             } else {
-                                debugNote.value = preds.length > 0 ? "FILTERING..." : "NO TARGET";
+                                debugNote.value = "SCANNING...";
                                 hasObj.value = false;
-                                stableFrames = 0;
                             }
                         }
                     }
                     requestAnimationFrame(detectLoop);
                 };
                 detectLoop();
-            } catch (e) { debugNote.value = "ERROR: " + e.message; }
+            } catch (e) { 
+                debugNote.value = "INIT ERROR: " + e.message;
+                console.error(e);
+            }
         });
 
         const triggerOCR = async () => {
             if (b.value) return;
             const v = document.getElementById('v'), cv = document.getElementById('c');
             b.value = true;
-            debugNote.value = ">>> ANALYZING PLATE <<<";
             
             cv.width = 800; cv.height = (v.videoHeight / v.videoWidth) * 800;
             cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
@@ -121,17 +121,13 @@ createApp({
             cv.toBlob(async (blob) => {
                 try {
                     const fd = new FormData();
-                    fd.append('upload', blob, 'capture.jpg');
-                    const path = m.value === 'c' ? '/identify_cn' : '/identify_intl';
-                    const res = await axios.post(`${BASE}${path}`, fd);
-                    if (res.data.status === 'success') {
-                        r.value = res.data.plate;
-                    }
+                    fd.append('upload', blob, 'img.jpg');
+                    const res = await axios.post(`${BASE}${m.value==='c'?'/identify_cn':'/identify_intl'}`, fd);
+                    if (res.data.status === 'success') r.value = res.data.plate;
                 } catch (e) { 
                     r.value = "OFFLINE"; 
                 } finally {
-                    // 縮短冷卻時間到 1.0 秒，讓操作更流暢
-                    setTimeout(() => { b.value = false; }, 1000);
+                    setTimeout(() => { b.value = false; }, 1800);
                 }
             }, 'image/jpeg', 0.85);
         };
