@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>S.F. ALPR System</title>
+    <title>Testing ALPR System</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
     <style>
@@ -31,8 +31,8 @@
     <video id="v" autoplay playsinline muted></video>
     <div :class="['ui', b ? 'busy' : '']">
         <div class="nav">
-            <div :class="['btn', m==='c'?'active':'']" @click="m='c'">ZONE A (中國/黑牌)</div>
-            <div :class="['btn', m==='h'?'active':'']" @click="m='h'">ZONE B (香港/英數)</div>
+            <div :class="['btn', m==='c'?'active':'']" @click="m='c'">ZONE A (中國/中港車牌)</div>
+            <div :class="['btn', m==='h'?'active':'']" @click="m='h'">ZONE B (香港/英國車牌)</div>
         </div>
         <div class="vp">
             <div :class="['box', bx]"></div>
@@ -58,7 +58,7 @@ createApp({
                 video: { facingMode: "environment", width: { ideal: 1280 } } 
             });
             document.getElementById('v').srcObject = s;
-            setInterval(scan, 3000); // 3秒影一次，確保 VM 唔會過熱
+            setInterval(scan, 1000); // 1秒影一次，確保 VM 唔會過熱
         });
 
         const scan = async () => {
