@@ -46,7 +46,7 @@
         <div class="pnl">
             <div class="debug-note">[[ {{ debugNote }} ]]</div>
             <div class="num" :style="{color: rc}">{{ r || '---' }}</div>
-            <div class="st">ENDPOINT: alpr.cloudence.uk | {{ b ? 'IDENTIFYING' : 'READY' }}</div>
+            <div class="st">Adroit+ ALPR | {{ b ? 'IDENTIFYING' : 'READY' }}</div>
         </div>
     </div>
     <canvas id="c" style="display:none;"></canvas>
@@ -57,7 +57,7 @@ const { createApp, ref, onMounted, computed } = Vue;
 createApp({
     setup() {
         const r = ref(""), b = ref(false), m = ref("c");
-        const ready = ref(false), hasObj = ref(false), debugNote = ref("⚡ 引擎加速中...");
+        const ready = ref(false), hasObj = ref(false), debugNote = ref("Loading engine...");
         const BASE = "https://alpr.cloudence.uk";
 
         onMounted(async () => {
