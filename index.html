@@ -57,57 +57,54 @@ const { createApp, ref, onMounted, computed } = Vue;
 createApp({
     setup() {
         const r = ref(""), b = ref(false), m = ref("c");
-        const ready = ref(false), hasObj = ref(false), debugNote = ref("WAITING FOR TFJS...");
+        const ready = ref(false), hasObj = ref(false), debugNote = ref("⚡ 引擎加速中...");
         const BASE = "https://alpr.cloudence.uk";
 
         onMounted(async () => {
             try {
-                // 1. Make sure TensorFlow loaded
-                if (typeof tf === 'undefined') {
-                    debugNote.value = "ERROR: TFJS NOT FOUND";
-                    return;
-                }
-
-                // 2. Camera Request
+                // Using WebGL to speed up
+                await tf.setBackend('webgl');
+                
                 const s = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: "environment", width: { ideal: 1280 } } 
                 });
                 document.getElementById('v').srcObject = s;
                 
-                // 3. LLM Loading
-                debugNote.value = "LOADING COCO-SSD...";
-                const net = await cocoSsd.load();
+                // 設定預測參數：限制偵測數量為 3，提高速度
+                const net = await cocoSsd.load({ base: 'mobilenet_v2' }); 
                 ready.value = true;
-                debugNote.value = "ALPR ONLINE - SCANNING";
+                debugNote.value = "極速模式已啟動";
                 
-                const detectLoop = async () => {
-                    if (!b.value && ready.value) {
-                        const v = document.getElementById('v');
-                        if (v.readyState === 4) {
-                            const preds = await net.detect(v);
-                            
-                            // Detect Car
-                            const target = preds.find(p => 
-                                ['car','truck','bus','motorcycle','handbag','book'].includes(p.class) && p.score > 0.35
-                            );
-                            
-                            if (target) {
-                                debugNote.value = `DETECTED: ${target.class.toUpperCase()} (${Math.round(target.score*100)}%)`;
-                                hasObj.value = true;
-                                triggerOCR();
-                            } else {
-                                debugNote.value = "SCANNING...";
-                                hasObj.value = false;
-                            }
+                // 使用效能更好的偵測迴圈
+                const detectFrame = async () => {
+                    if (b.value || !ready.value) {
+                        setTimeout(detectFrame, 200); // 辨識中降低偵測頻率
+                        return;
+                    }
+
+                    const v = document.getElementById('v');
+                    if (v.readyState === 4) {
+                        // 核心優化：限制偵測目標數量與信心門檻
+                        const preds = await net.detect(v, 3, 0.3); 
+                        
+                        const target = preds.find(p => 
+                            ['car','truck','bus','motorcycle'].includes(p.class)
+                        );
+                        
+                        if (target) {
+                            hasObj.value = true;
+                            debugNote.value = `HIT: ${target.class.toUpperCase()}`;
+                            triggerOCR(); // 偵測到立刻閃擊
+                        } else {
+                            hasObj.value = false;
+                            debugNote.value = "SCANNING...";
                         }
                     }
-                    requestAnimationFrame(detectLoop);
+                    // 每 100ms 執行一次偵測 (10 FPS)，平衡功耗與速度
+                    setTimeout(detectFrame, 100); 
                 };
-                detectLoop();
-            } catch (e) { 
-                debugNote.value = "INIT ERROR: " + e.message;
-                console.error(e);
-            }
+                detectFrame();
+            } catch (e) { debugNote.value = "INIT ERR: " + e.message; }
         });
 
         const triggerOCR = async () => {
@@ -115,7 +112,9 @@ createApp({
             const v = document.getElementById('v'), cv = document.getElementById('c');
             b.value = true;
             
-            cv.width = 800; cv.height = (v.videoHeight / v.videoWidth) * 800;
+            // 縮小圖片尺寸發送給後端 (800px -> 600px) 加快網路傳輸
+            cv.width = 600; 
+            cv.height = (v.videoHeight / v.videoWidth) * 600;
             cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
 
             cv.toBlob(async (blob) => {
@@ -124,12 +123,12 @@ createApp({
                     fd.append('upload', blob, 'img.jpg');
                     const res = await axios.post(`${BASE}${m.value==='c'?'/identify_cn':'/identify_intl'}`, fd);
                     if (res.data.status === 'success') r.value = res.data.plate;
-                } catch (e) { 
-                    r.value = "OFFLINE"; 
-                } finally {
-                    setTimeout(() => { b.value = false; }, 1800);
+                } catch (e) { r.value = "OFFLINE"; }
+                finally {
+                    // 辨識完後立即開放下一波偵測
+                    setTimeout(() => { b.value = false; }, 800); 
                 }
-            }, 'image/jpeg', 0.85);
+            }, 'image/jpeg', 0.75); // 稍微降低畫質換取傳輸速度
         };
 
         const rc = computed(() => m.value==='c' ? '#007bff' : '#ffcc00');
