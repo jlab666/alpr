@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Adroit+ ALPR Engine</title>
+    <title>Adroit+ ALPR Web App</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <!-- 確保依賴加載順序 -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
@@ -14,19 +15,18 @@
         #v { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
         .ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; pointer-events: none; }
         .nav { padding: 15px; background: rgba(0,0,0,0.85); display: flex; gap: 8px; pointer-events: auto; }
-        .btn { flex: 1; padding: 15px; border-radius: 8px; background: #1a1a1a; color: #666; border: 1px solid #333; font-size: 12px; font-weight: bold; text-align: center; }
-        .btn.active { background: #fff; color: #000; border-color: #fff; }
+        .btn { flex: 1; padding: 12px; border-radius: 8px; background: #1a1a1a; color: #666; border: 1px solid #333; font-size: 11px; text-align: center; }
+        .btn.active { background: #fff; color: #000; font-weight: bold; border-color: #fff; }
         .vp { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; }
-        .box { width: 85%; height: 22%; border: 3px solid rgba(255,255,255,0.2); border-radius: 12px; transition: 0.3s; }
-        .is-target { border-color: var(--active) !important; box-shadow: 0 0 25px var(--active); }
-        .c1 { border-color: var(--p1); }
-        .c2 { border-color: var(--p2); }
-        .ld { position: absolute; width: 40px; height: 40px; border: 4px solid transparent; border-top-color: #fff; border-radius: 50%; animation: sp 1s linear infinite; display: none; }
+        .box { width: 85%; height: 22%; border: 3px solid rgba(255,255,255,0.2); border-radius: 12px; transition: 0.2s; }
+        .is-target { border-color: var(--active) !important; box-shadow: 0 0 20px var(--active); }
+        .ld { position: absolute; width: 40px; height: 40px; border: 3px solid transparent; border-top-color: #fff; border-radius: 50%; animation: sp 1s linear infinite; display: none; }
         .busy .ld { display: block; }
         @keyframes sp { to { transform: rotate(360deg); } }
-        .pnl { padding: 35px; background: #000; text-align: center; pointer-events: auto; }
-        .num { font-size: 52px; font-weight: 900; min-height: 60px; text-shadow: 0 0 10px rgba(0,0,0,0.5); }
-        .st { font-size: 10px; color: #444; margin-top: 10px; letter-spacing: 1px; }
+        .pnl { padding: 25px; background: #000; text-align: center; pointer-events: auto; }
+        .num { font-size: 48px; font-weight: 800; min-height: 55px; }
+        .debug-info { font-size: 10px; color: #00ff00; font-family: monospace; margin-bottom: 5px; }
+        .st { font-size: 9px; color: #444; text-transform: uppercase; }
     </style>
 </head>
 <body>
@@ -42,8 +42,10 @@
             <div class="ld"></div>
         </div>
         <div class="pnl">
+            <!-- 偵測監控器：幫助排查問題 -->
+            <div class="debug-info">AI 看到: {{ debugTags || '正在掃描畫面...' }}</div>
             <div class="num" :style="{color: rc}">{{ r || '---' }}</div>
-            <div class="st">AI Engine: {{ ready ? 'ONLINE' : 'LOADING' }} | Status: {{ b ? 'PROCESSING' : 'SCANNING' }}</div>
+            <div class="st">模型狀態: {{ ready ? 'ONLINE' : 'LOADING AI...' }} | {{ b ? '辨識中' : '等待目標' }}</div>
         </div>
     </div>
     <canvas id="c" style="display:none;"></canvas>
@@ -53,28 +55,49 @@
 const { createApp, ref, onMounted, computed } = Vue;
 createApp({
     setup() {
-        const r = ref(""), b = ref(false), m = ref("c"), ready = ref(false), hasObj = ref(false);
+        const r = ref(""), b = ref(false), m = ref("c"), ready = ref(false), hasObj = ref(false), debugTags = ref("");
         const BASE = "https://surrey-buyer-think-vegetarian.trycloudflare.com";
 
         onMounted(async () => {
-            const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280 } });
-            document.getElementById('v').srcObject = s;
-            const net = await cocoSsd.load(); // 載入偵測模型
-            ready.value = true;
-            setInterval(() => runDetection(net), 600); // 每一秒偵測兩次
+            try {
+                const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280 } });
+                document.getElementById('v').srcObject = s;
+                
+                // 加載偵測模型
+                const net = await cocoSsd.load();
+                ready.value = true;
+                
+                // 執行循環偵測
+                const loop = async () => {
+                    await runDetection(net);
+                    requestAnimationFrame(loop); // 使用 requestAnimationFrame 效能更好
+                };
+                loop();
+            } catch (e) { debugTags.value = "Camera/AI Error"; }
         });
 
         const runDetection = async (net) => {
             if (b.value || !ready.value) return;
             const v = document.getElementById('v');
+            if (v.readyState !== 4) return;
+
             const preds = await net.detect(v);
-            // 檢查有沒有車輛類別
-            const found = preds.some(p => ['car','truck','bus','motorcycle'].includes(p.class));
             
-            if (found) {
-                hasObj.value = true;
-                doOCR();
+            if (preds.length > 0) {
+                // 顯示目前 AI 看到的所有東西
+                debugTags.value = preds.map(p => `${p.class}(${Math.round(p.score*100)}%)`).join(', ');
+                
+                // 偵測過濾器：包含車輛相關標籤
+                const found = preds.some(p => ['car','truck','bus','motorcycle','person'].includes(p.class));
+                
+                if (found) {
+                    hasObj.value = true;
+                    doOCR();
+                } else {
+                    hasObj.value = false;
+                }
             } else {
+                debugTags.value = "未偵測到物件";
                 hasObj.value = false;
             }
         };
@@ -83,24 +106,31 @@ createApp({
             if (b.value) return;
             const v = document.getElementById('v'), cv = document.getElementById('c');
             b.value = true;
+            
+            // 抓取圖片
             cv.width = 800; cv.height = (v.videoHeight / v.videoWidth) * 800;
             cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
 
             cv.toBlob(async (blob) => {
                 const path = m.value === 'c' ? "/identify_cn" : "/identify_intl";
                 try {
-                    const fd = new FormData(); fd.append('upload', blob, 'img.jpg');
+                    const fd = new FormData();
+                    fd.append('upload', blob, 'img.jpg');
                     const s = await axios.post(BASE + path, fd);
-                    if (s.data.status === 'success') r.value = s.data.plate;
-                } catch (e) {} finally {
-                    setTimeout(() => { b.value = false; }, 1000); // 辨識後強制冷卻 1 秒
+                    if (s.data.status === 'success') {
+                        r.value = s.data.plate;
+                    }
+                } catch (e) { r.value = "OFFLINE"; }
+                finally {
+                    // 增加冷卻時間，避免連續請求
+                    setTimeout(() => { b.value = false; }, 1000);
                 }
             }, 'image/jpeg', 0.85);
         };
 
         const bx = computed(() => m.value==='c' ? 'c1' : 'c2');
         const rc = computed(() => m.value==='c' ? '#007bff' : '#ffcc00');
-        return { r, b, m, bx, rc, ready, hasObj };
+        return { r, b, m, bx, rc, ready, hasObj, debugTags };
     }
 }).mount('#app');
 </script>
