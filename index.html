@@ -6,49 +6,59 @@
     <title>Adroit+ ALPR App</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-    
-    <!-- loging tfjs core，then coco-ssd -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.15.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
-
     <style>
         :root { --p1: #007bff; --p2: #ffcc00; --active: #00ff00; }
-        body { margin: 0; background: #000; color: #fff; font-family: 'Courier New', Courier, monospace; overflow: hidden; }
+        body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', Courier, monospace; }
         #v { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
-        .ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; pointer-events: none; }
-        .nav { padding: 15px; background: rgba(0,0,0,0.85); display: flex; gap: 10px; pointer-events: auto; }
-        .btn { flex: 1; padding: 12px; border-radius: 10px; background: #1a1a1a; color: #666; border: 1px solid #333; font-size: 11px; font-weight: bold; text-align: center; }
-        .btn.active { background: #fff; color: #000; border-color: #fff; }
-        .vp { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; }
-        .box { width: 85%; height: 25%; border: 2px solid rgba(255,255,255,0.2); border-radius: 15px; transition: 0.1s; position: relative; }
-        .is-target { border-color: var(--active) !important; border-width: 4px; box-shadow: 0 0 25px var(--active); }
-        .loader { position: absolute; width: 50px; height: 50px; border: 4px solid transparent; border-top-color: #fff; border-radius: 50%; animation: sp 1s linear infinite; display: none; }
+        
+        /* Dynamic */
+        #track-box {
+            position: absolute;
+            border: 2px solid var(--active);
+            border-radius: 4px;
+            box-shadow: 0 0 15px var(--active);
+            display: none;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: flex; flex-direction: column; }
+        .nav { padding: 15px; background: rgba(0,0,0,0.7); display: flex; gap: 10px; pointer-events: auto; }
+        .btn { flex: 1; padding: 12px; border-radius: 8px; background: #1a1a1a; color: #fff; border: 1px solid #333; text-align: center; font-size: 11px; font-weight: bold; }
+        .btn.active { background: #fff; color: #000; }
+        
+        .pnl { margin-top: auto; padding: 25px; background: linear-gradient(transparent, rgba(0,0,0,0.9) 30%); text-align: center; pointer-events: auto; }
+        .debug-note { font-size: 11px; color: #00ff00; background: rgba(0,0,0,0.6); padding: 5px; border-radius: 4px; margin-bottom: 10px; display: inline-block; min-height: 15px; }
+        .num { font-size: 48px; font-weight: 900; color: #fff; min-height: 60px; letter-spacing: 2px; }
+        .st { font-size: 9px; color: #555; margin-top: 5px; }
+        
+        .loader { width: 30px; height: 30px; border: 3px solid transparent; border-top-color: #fff; border-radius: 50%; animation: sp 1s linear infinite; margin: 10px auto; display: none; }
         .busy .loader { display: block; }
         @keyframes sp { to { transform: rotate(360deg); } }
-        .pnl { padding: 20px; background: rgba(0,0,0,0.9); text-align: center; pointer-events: auto; }
-        .debug-note { font-size: 11px; color: #00ff00; margin-bottom: 5px; min-height: 14px; }
-        .num { font-size: 50px; font-weight: 900; min-height: 62px; letter-spacing: 2px; }
-        .st { font-size: 9px; color: #555; }
     </style>
 </head>
 <body>
 <div id="app">
     <video id="v" autoplay playsinline muted></video>
+    
+    <!-- Dynmic UI Elements -->
+    <div id="track-box" :style="boxStyle"></div>
+
     <div :class="['ui', b ? 'busy' : '']">
         <div class="nav">
             <div :class="['btn', m==='c'?'active':'']" @click="m='c'">ZONE A (中國/中港車牌)</div>
             <div :class="['btn', m==='h'?'active':'']" @click="m='h'">ZONE B (香港/英國車牌)</div>
         </div>
-        <div class="vp">
-            <div :class="['box', { 'is-target': hasObj }]"></div>
-            <div class="loader"></div>
-        </div>
         <div class="pnl">
-            <div class="debug-note">[[ {{ debugNote }} ]]</div>
+            <div class="debug-note">[[ {{ debugMsg }} ]]</div>
             <div class="num" :style="{color: rc}">{{ r || '---' }}</div>
-            <div class="st">Adroit+ ALPR | {{ b ? 'IDENTIFYING' : 'READY' }}</div>
+            <div class="loader"></div>
+            <div class="st">DYNAMIC TRACKING: {{ boxStyle.display === 'block' ? 'LOCKED' : 'SCANNING' }}</div>
         </div>
     </div>
+    <!-- Cut the frame -->
     <canvas id="c" style="display:none;"></canvas>
 </div>
 
@@ -57,82 +67,92 @@ const { createApp, ref, onMounted, computed } = Vue;
 createApp({
     setup() {
         const r = ref(""), b = ref(false), m = ref("c");
-        const ready = ref(false), hasObj = ref(false), debugNote = ref("Loading engine...");
+        const debugMsg = ref("WAITING FOR TFJS..."), boxStyle = ref({ display: 'none' });
         const BASE = "https://alpr.cloudence.uk";
 
         onMounted(async () => {
             try {
-                // Using WebGL to speed up
                 await tf.setBackend('webgl');
-                
-                const s = await navigator.mediaDevices.getUserMedia({ 
+                const video = document.getElementById('v');
+                const stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: "environment", width: { ideal: 1280 } } 
                 });
-                document.getElementById('v').srcObject = s;
+                video.srcObject = stream;
                 
-                // 設定預測參數：限制偵測數量為 3，提高速度
-                const net = await cocoSsd.load({ base: 'mobilenet_v2' }); 
-                ready.value = true;
-                debugNote.value = "極速模式已啟動";
-                
-                // 使用效能更好的偵測迴圈
-                const detectFrame = async () => {
-                    if (b.value || !ready.value) {
-                        setTimeout(detectFrame, 200); // 辨識中降低偵測頻率
-                        return;
-                    }
+                debugMsg.value = "LOADING COCO-SSD...";
+                const net = await cocoSsd.load({ base: 'mobilenet_v2' });
+                debugMsg.value = "SYSTEM READY: DYNAMIC MODE";
 
-                    const v = document.getElementById('v');
-                    if (v.readyState === 4) {
-                        // 核心優化：限制偵測目標數量與信心門檻
-                        const preds = await net.detect(v, 3, 0.3); 
-                        
-                        const target = preds.find(p => 
-                            ['car','truck','bus','motorcycle'].includes(p.class)
-                        );
-                        
-                        if (target) {
-                            hasObj.value = true;
-                            debugNote.value = `HIT: ${target.class.toUpperCase()}`;
-                            triggerOCR(); // 偵測到立刻閃擊
-                        } else {
-                            hasObj.value = false;
-                            debugNote.value = "SCANNING...";
+                const detectFrame = async () => {
+                    if (!b.value) {
+                        if (video.readyState === 4) {
+                            const preds = await net.detect(video, 2, 0.35);
+                            const target = preds.find(p => ['car', 'truck', 'bus', 'motorcycle'].includes(p.class));
+
+                            if (target) {
+                                // trace the frame
+                                const [x, y, w, h] = target.bbox;
+                                const sX = window.innerWidth / video.videoWidth;
+                                const sY = window.innerHeight / video.videoHeight;
+                                
+                                boxStyle.value = {
+                                    display: 'block',
+                                    left: (x * sX) + 'px',
+                                    top: (y * sY) + 'px',
+                                    width: (w * sX) + 'px',
+                                    height: (h * sY) + 'px'
+                                };
+
+                                debugMsg.value = `TRACK: ${target.class.toUpperCase()} | CONF: ${Math.round(target.score*100)}%`;
+                                triggerOCR(target.bbox);
+                            } else {
+                                boxStyle.value = { display: 'none' };
+                                debugMsg.value = "SEARCHING FOR VEHICLE...";
+                            }
                         }
                     }
-                    // 每 100ms 執行一次偵測 (10 FPS)，平衡功耗與速度
-                    setTimeout(detectFrame, 100); 
+                    requestAnimationFrame(detectFrame);
                 };
                 detectFrame();
-            } catch (e) { debugNote.value = "INIT ERR: " + e.message; }
+            } catch (e) { debugMsg.value = "INIT ERR: " + e.message; }
         });
 
-        const triggerOCR = async () => {
+        const triggerOCR = async (bbox) => {
             if (b.value) return;
             const v = document.getElementById('v'), cv = document.getElementById('c');
             b.value = true;
-            
-            // 縮小圖片尺寸發送給後端 (800px -> 600px) 加快網路傳輸
-            cv.width = 600; 
-            cv.height = (v.videoHeight / v.videoWidth) * 600;
-            cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+
+            // dynamic cut：extend 15% to make sure include the plate
+            const [x, y, w, h] = bbox;
+            const pad = 0.15;
+            const cX = Math.max(0, x - w * pad);
+            const cY = Math.max(0, y - h * pad);
+            const cW = Math.min(v.videoWidth - cX, w * (1 + pad * 2));
+            const cH = Math.min(v.videoHeight - cY, h * (1 + pad * 2));
+
+            cv.width = cW; cv.height = cH;
+            cv.getContext('2d').drawImage(v, cX, cY, cW, cH, 0, 0, cW, cH);
+
+            debugMsg.value = `>>> CROP & SEND (${Math.round(cW)}x${Math.round(cH)}) <<<`;
 
             cv.toBlob(async (blob) => {
                 try {
                     const fd = new FormData();
-                    fd.append('upload', blob, 'img.jpg');
-                    const res = await axios.post(`${BASE}${m.value==='c'?'/identify_cn':'/identify_intl'}`, fd);
-                    if (res.data.status === 'success') r.value = res.data.plate;
+                    fd.append('upload', blob, 'crop.jpg');
+                    const path = m.value === 'c' ? '/identify_cn' : '/identify_intl';
+                    const res = await axios.post(`${BASE}${path}`, fd);
+                    if (res.data.status === 'success') {
+                        r.value = res.data.plate;
+                    }
                 } catch (e) { r.value = "OFFLINE"; }
                 finally {
-                    // 辨識完後立即開放下一波偵測
-                    setTimeout(() => { b.value = false; }, 800); 
+                    setTimeout(() => { b.value = false; }, 2000);
                 }
-            }, 'image/jpeg', 0.75); // 稍微降低畫質換取傳輸速度
+            }, 'image/jpeg', 0.85);
         };
 
         const rc = computed(() => m.value==='c' ? '#007bff' : '#ffcc00');
-        return { r, b, m, ready, hasObj, debugNote, rc };
+        return { r, b, m, debugMsg, boxStyle, rc };
     }
 }).mount('#app');
 </script>
