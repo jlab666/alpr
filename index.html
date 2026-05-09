@@ -3,27 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Testing ALPR System</title>
+    <title>Adroit+ ALPR Engine</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
-        :root { --p1: #007bff; --p2: #ffcc00; }
+        :root { --p1: #007bff; --p2: #ffcc00; --active: #00ff00; }
         body { margin: 0; background: #000; color: #fff; font-family: sans-serif; overflow: hidden; }
         #v { width: 100vw; height: 100vh; object-fit: cover; position: absolute; }
         .ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; pointer-events: none; }
         .nav { padding: 15px; background: rgba(0,0,0,0.85); display: flex; gap: 8px; pointer-events: auto; }
-        .btn { flex: 1; padding: 15px; border-radius: 8px; border: 1px solid #444; background: #222; color: #888; font-size: 14px; font-weight: bold; text-align: center; }
+        .btn { flex: 1; padding: 15px; border-radius: 8px; background: #1a1a1a; color: #666; border: 1px solid #333; font-size: 12px; font-weight: bold; text-align: center; }
         .btn.active { background: #fff; color: #000; border-color: #fff; }
         .vp { flex: 1; display: flex; align-items: center; justify-content: center; position: relative; }
-        .box { width: 85%; height: 22%; border: 3px solid rgba(255,255,255,0.3); border-radius: 12px; transition: 0.3s; }
-        .c1 { border-color: var(--p1); box-shadow: 0 0 25px var(--p1); }
-        .c2 { border-color: var(--p2); box-shadow: 0 0 25px var(--p2); }
-        .loader { position: absolute; width: 50px; height: 50px; border: 4px solid transparent; border-top-color: #fff; border-radius: 50%; animation: sp 1s linear infinite; display: none; }
-        .busy .loader { display: block; }
+        .box { width: 85%; height: 22%; border: 3px solid rgba(255,255,255,0.2); border-radius: 12px; transition: 0.3s; }
+        .is-target { border-color: var(--active) !important; box-shadow: 0 0 25px var(--active); }
+        .c1 { border-color: var(--p1); }
+        .c2 { border-color: var(--p2); }
+        .ld { position: absolute; width: 40px; height: 40px; border: 4px solid transparent; border-top-color: #fff; border-radius: 50%; animation: sp 1s linear infinite; display: none; }
+        .busy .ld { display: block; }
         @keyframes sp { to { transform: rotate(360deg); } }
         .pnl { padding: 35px; background: #000; text-align: center; pointer-events: auto; }
-        .num { font-size: 50px; font-weight: 900; letter-spacing: 2px; }
-        .st { font-size: 11px; color: #555; margin-top: 10px; text-transform: uppercase; }
+        .num { font-size: 52px; font-weight: 900; min-height: 60px; text-shadow: 0 0 10px rgba(0,0,0,0.5); }
+        .st { font-size: 10px; color: #444; margin-top: 10px; letter-spacing: 1px; }
     </style>
 </head>
 <body>
@@ -35,12 +38,12 @@
             <div :class="['btn', m==='h'?'active':'']" @click="m='h'">ZONE B (香港/英國車牌)</div>
         </div>
         <div class="vp">
-            <div :class="['box', bx]"></div>
-            <div class="loader"></div>
+            <div :class="['box', bx, { 'is-target': hasObj }]"></div>
+            <div class="ld"></div>
         </div>
         <div class="pnl">
             <div class="num" :style="{color: rc}">{{ r || '---' }}</div>
-            <div class="st">狀態: {{ b ? '辨識中...' : '就緒' }} | 紀錄已同步</div>
+            <div class="st">AI Engine: {{ ready ? 'ONLINE' : 'LOADING' }} | Status: {{ b ? 'PROCESSING' : 'SCANNING' }}</div>
         </div>
     </div>
     <canvas id="c" style="display:none;"></canvas>
@@ -50,46 +53,54 @@
 const { createApp, ref, onMounted, computed } = Vue;
 createApp({
     setup() {
-        const r = ref(""), b = ref(false), m = ref("c");
-        const BASE = "https://sao-silent-super-reason.trycloudflare.com";
+        const r = ref(""), b = ref(false), m = ref("c"), ready = ref(false), hasObj = ref(false);
+        const BASE = "https://surrey-buyer-think-vegetarian.trycloudflare.com";
 
         onMounted(async () => {
-            const s = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: "environment", width: { ideal: 1280 } } 
-            });
+            const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 1280 } });
             document.getElementById('v').srcObject = s;
-            setInterval(scan, 1000); // 1秒影一次，確保 VM 唔會過熱
+            const net = await cocoSsd.load(); // 載入偵測模型
+            ready.value = true;
+            setInterval(() => runDetection(net), 600); // 每一秒偵測兩次
         });
 
-        const scan = async () => {
+        const runDetection = async (net) => {
+            if (b.value || !ready.value) return;
+            const v = document.getElementById('v');
+            const preds = await net.detect(v);
+            // 檢查有沒有車輛類別
+            const found = preds.some(p => ['car','truck','bus','motorcycle'].includes(p.class));
+            
+            if (found) {
+                hasObj.value = true;
+                doOCR();
+            } else {
+                hasObj.value = false;
+            }
+        };
+
+        const doOCR = async () => {
             if (b.value) return;
             const v = document.getElementById('v'), cv = document.getElementById('c');
-            if (v.readyState !== 4) return;
-
             b.value = true;
-            cv.width = 800; cv.height = (v.videoHeight/v.videoWidth)*800;
+            cv.width = 800; cv.height = (v.videoHeight / v.videoWidth) * 800;
             cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
-            
+
             cv.toBlob(async (blob) => {
                 const path = m.value === 'c' ? "/identify_cn" : "/identify_intl";
                 try {
-                    const fd = new FormData();
-                    fd.append('upload', blob, 'capture.jpg');
+                    const fd = new FormData(); fd.append('upload', blob, 'img.jpg');
                     const s = await axios.post(BASE + path, fd);
-                    if (s.data.status === 'success') {
-                        r.value = s.data.plate;
-                    }
-                } catch (e) {
-                    console.error("System Error");
-                } finally {
-                    b.value = false;
+                    if (s.data.status === 'success') r.value = s.data.plate;
+                } catch (e) {} finally {
+                    setTimeout(() => { b.value = false; }, 1000); // 辨識後強制冷卻 1 秒
                 }
-            }, 'image/jpeg', 0.9);
+            }, 'image/jpeg', 0.85);
         };
 
         const bx = computed(() => m.value==='c' ? 'c1' : 'c2');
         const rc = computed(() => m.value==='c' ? '#007bff' : '#ffcc00');
-        return { r, b, m, bx, rc };
+        return { r, b, m, bx, rc, ready, hasObj };
     }
 }).mount('#app');
 </script>
